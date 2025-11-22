@@ -1,0 +1,5 @@
+{
+  "name": "StatCode AI",
+  "description": "An automated occupational coding assistant for statisticians using ISCO-08 and Gemini AI.",
+  "requestFramePermissions": []
+}
