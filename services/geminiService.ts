@@ -243,6 +243,8 @@ export const codeSingleOccupation = async (
           responseMimeType: "application/json",
           responseSchema: codingResponseSchema,
           temperature: 0.1,
+          // Enable Thinking for better accuracy on classification tasks
+          thinkingConfig: { thinkingBudget: 1024 }
         },
       });
 

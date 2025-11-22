@@ -688,14 +688,32 @@ const ManualCodingModal: React.FC<{
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
+  // Autocomplete State
+  const [suggestions, setSuggestions] = useState<{code: string, label: string}[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
   useEffect(() => {
     if (isOpen && row) {
       setCode(row.result?.code || '');
       setLabel(row.result?.label || '');
       setSearchQuery(row[mapping.jobTitleColumn] || '');
       setSearchResults([]);
+      setSuggestions([]);
     }
   }, [isOpen, row, mapping]);
+
+  // Autocomplete logic for Label input
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      if (label.length > 2 && showSuggestions) {
+        const results = await suggestCodes(label, activeModule, settings);
+        setSuggestions(results);
+      } else {
+        setSuggestions([]);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [label, showSuggestions, activeModule, settings]);
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
@@ -710,9 +728,10 @@ const ManualCodingModal: React.FC<{
     }
   };
 
-  const handleApplyResult = (res: SearchResult) => {
+  const handleApplyResult = (res: SearchResult | {code: string, label: string}) => {
     setCode(res.code);
     setLabel(res.label);
+    setShowSuggestions(false);
   };
 
   const handleConfirm = () => {
@@ -757,7 +776,7 @@ const ManualCodingModal: React.FC<{
 
             <div>
               <h4 className="text-xs font-semibold uppercase text-slate-500 mb-2">Assigned Code</h4>
-              <div className="space-y-3">
+              <div className="space-y-3 relative">
                 <div>
                   <label className="block text-xs text-slate-600 mb-1">Code</label>
                   <input 
@@ -767,14 +786,33 @@ const ManualCodingModal: React.FC<{
                     className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none"
                   />
                 </div>
-                <div>
-                  <label className="block text-xs text-slate-600 mb-1">Label</label>
+                <div className="relative">
+                  <label className="block text-xs text-slate-600 mb-1">Label (Type to Auto-Complete)</label>
                   <input 
                     type="text" 
                     value={label} 
-                    onChange={(e) => setLabel(e.target.value)}
+                    onChange={(e) => { setLabel(e.target.value); setShowSuggestions(true); }}
+                    onFocus={() => setShowSuggestions(true)}
+                    onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
                     className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    autoComplete="off"
                   />
+                  {showSuggestions && suggestions.length > 0 && (
+                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-md shadow-lg z-50 max-h-48 overflow-y-auto">
+                      {suggestions.map((s, idx) => (
+                        <div 
+                          key={idx} 
+                          onClick={() => handleApplyResult(s)}
+                          className="px-3 py-2 hover:bg-blue-50 cursor-pointer border-b border-slate-50 last:border-0"
+                        >
+                          <div className="flex justify-between">
+                            <span className="font-bold text-xs text-blue-600 font-mono">{s.code}</span>
+                          </div>
+                          <div className="text-xs text-slate-700 truncate">{s.label}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1497,10 +1535,18 @@ const ResultsTable: React.FC<{
   const [page, setPage] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [confidenceFilter, setConfidenceFilter] = useState<string>('All');
+  const [textFilter, setTextFilter] = useState('');
   const ROWS_PER_PAGE = 50;
   
   // Filtering Logic
   const filteredData = data.filter(row => {
+    // Text Filter
+    const primary = row[mapping.jobTitleColumn]?.toString().toLowerCase() || '';
+    const secondary = mapping.jobDescriptionColumn ? (row[mapping.jobDescriptionColumn]?.toString().toLowerCase() || '') : '';
+    const matchesText = !textFilter || primary.includes(textFilter.toLowerCase()) || secondary.includes(textFilter.toLowerCase());
+
+    if (!matchesText) return false;
+
     if (confidenceFilter === 'All') return true;
     if (confidenceFilter === 'Error') return row.codingStatus === 'error';
     if (confidenceFilter === 'Pending') return row.codingStatus === 'pending';
@@ -1519,7 +1565,7 @@ const ResultsTable: React.FC<{
   // Reset page when filter changes
   useEffect(() => {
     setPage(0);
-  }, [confidenceFilter]);
+  }, [confidenceFilter, textFilter]);
 
   const codedCount = data.filter(r => r.codingStatus === 'coded').length;
   const errorCount = data.filter(r => r.codingStatus === 'error').length;
@@ -1594,7 +1640,19 @@ const ResultsTable: React.FC<{
           </p>
         </div>
         
-        <div className="flex gap-3">
+        <div className="flex gap-3 items-center">
+           {/* Search */}
+           <div className="relative">
+             <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+             <input 
+                type="text" 
+                placeholder="Search rows..." 
+                value={textFilter}
+                onChange={(e) => setTextFilter(e.target.value)}
+                className="pl-9 pr-3 py-2 bg-white border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none shadow-sm"
+             />
+           </div>
+
           {/* Confidence Filter */}
           <div className="relative">
             <FilterIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -1702,7 +1760,7 @@ const ResultsTable: React.FC<{
               {displayedData.length === 0 ? (
                  <tr>
                     <td colSpan={8} className="px-6 py-12 text-center text-slate-400">
-                       No rows match the filter "{confidenceFilter}".
+                       No rows match the filter.
                     </td>
                  </tr>
               ) : displayedData.map((row, idx) => {
