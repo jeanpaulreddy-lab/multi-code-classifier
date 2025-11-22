@@ -1065,7 +1065,9 @@ const Sidebar: React.FC<{
   currentMode: ProcessingMode;
   onSaveSession: () => void;
   onClearSession: () => void;
-}> = ({ activeModule, onModuleSelect, onOpenSettings, currentMode, onSaveSession, onClearSession }) => {
+  canInstall: boolean;
+  onInstall: () => void;
+}> = ({ activeModule, onModuleSelect, onOpenSettings, currentMode, onSaveSession, onClearSession, canInstall, onInstall }) => {
   const [hoveredModule, setHoveredModule] = useState<ModuleType | 'interactive' | 'roadmap' | 'dashboard' | null>(null);
 
   return (
@@ -1179,6 +1181,17 @@ const Sidebar: React.FC<{
         </button>
 
         <div className="h-px bg-slate-800 my-3" />
+        
+        {/* Install Button */}
+        {canInstall && (
+            <button 
+            onClick={onInstall}
+            className="w-full flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors text-sm font-bold mb-2 shadow-md"
+            >
+            <DownloadIcon className="w-4 h-4" />
+            Install App
+            </button>
+        )}
 
         <button 
           onClick={onOpenSettings}
@@ -1191,7 +1204,7 @@ const Sidebar: React.FC<{
           <div className={`w-2 h-2 rounded-full ${currentMode === ProcessingMode.Cloud ? 'bg-blue-500' : 'bg-emerald-500'}`} />
         </button>
         <div className="mt-1 text-xs text-slate-600 text-center">
-          v1.7.0 &bull; {currentMode === ProcessingMode.Cloud ? 'Cloud Mode' : 'Offline Mode'}
+          v1.7.1 &bull; {currentMode === ProcessingMode.Cloud ? 'Cloud Mode' : 'Offline Mode'}
         </div>
       </div>
     </div>
@@ -1923,6 +1936,27 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   
+  // PWA State
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  useEffect(() => {
+    const handler = (e: any) => {
+        e.preventDefault();
+        setDeferredPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setDeferredPrompt(null);
+    }
+  };
+  
   // Manual Edit State
   const [editingRowIndex, setEditingRowIndex] = useState<number | null>(null);
 
@@ -2140,6 +2174,8 @@ export default function App() {
         currentMode={aiSettings.mode}
         onSaveSession={handleSaveSession}
         onClearSession={handleClearSession}
+        canInstall={!!deferredPrompt}
+        onInstall={handleInstallClick}
       />
       
       <div className="flex-1 ml-64 flex flex-col">
