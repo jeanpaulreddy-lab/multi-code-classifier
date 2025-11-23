@@ -382,11 +382,11 @@ const KnowledgeBaseView: React.FC = () => {
 
                 {uploadStep === 'idle' && (
                     <div className="border-2 border-dashed border-slate-300 rounded-lg p-12 text-center hover:bg-slate-50 transition-colors">
-                        <p className="text-slate-500 mb-4">Upload a CSV or Excel file containing official codes and descriptions.</p>
+                        <p className="text-slate-500 mb-4">Upload a CSV, Excel or OpenDocument file containing official codes and descriptions.</p>
                          <label className="inline-block">
                             <input 
                             type="file" 
-                            accept=".csv, .xlsx, .xls" 
+                            accept=".csv, .xlsx, .xls, .ods" 
                             className="hidden" 
                             onChange={(e) => {
                                 if (e.target.files?.[0]) handleFile(e.target.files[0]);
@@ -1062,7 +1062,7 @@ const FileUpload: React.FC<{ onFileUpload: (data: RawDataRow[]) => void }> = ({ 
       onFileUpload(data);
     } catch (e) {
       console.error("File parse error", e);
-      alert("Error parsing file. Ensure it is a valid CSV or Excel file.");
+      alert("Error parsing file. Ensure it is a valid CSV, Excel or OpenDocument file.");
     }
   };
 
@@ -1079,12 +1079,12 @@ const FileUpload: React.FC<{ onFileUpload: (data: RawDataRow[]) => void }> = ({ 
         <UploadIcon className="w-8 h-8" />
       </div>
       <h3 className="text-xl font-bold text-slate-800 mb-2">Upload Dataset</h3>
-      <p className="text-slate-500 mb-6">Drag and drop your CSV or Excel file here, or click to browse.</p>
+      <p className="text-slate-500 mb-6">Drag and drop your CSV, Excel or OpenDocument file here, or click to browse.</p>
       
       <label className="inline-block">
         <input 
           type="file" 
-          accept=".csv, .xlsx, .xls" 
+          accept=".csv, .xlsx, .xls, .ods" 
           className="hidden" 
           onChange={(e) => {
             if (e.target.files?.[0]) handleFile(e.target.files[0]);
@@ -2013,7 +2013,7 @@ export default function App() {
               </div>
               <h1 className="text-3xl font-bold text-slate-900 mb-2">Start New {activeModule} Session</h1>
               <p className="text-slate-500 mb-8 max-w-md text-center">
-                Begin by uploading your raw dataset. We support CSV and Excel (.xlsx).
+                Begin by uploading your raw dataset. We support CSV, Excel (.xlsx) and OpenDocument (.ods).
               </p>
               
               {/* Mode Indicator in Idle Screen */}

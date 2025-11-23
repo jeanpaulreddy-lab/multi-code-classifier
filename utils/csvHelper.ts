@@ -2,14 +2,15 @@ import { RawDataRow } from "../types";
 
 declare const XLSX: any;
 
-// Unified File Parser (CSV & Excel)
+// Unified File Parser (CSV & Excel & ODS)
 export const parseDataFile = (file: File): Promise<RawDataRow[]> => {
   return new Promise((resolve, reject) => {
-    const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
+    // Check for Excel or OpenDocument Spreadsheet extensions
+    const isSpreadsheet = file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || file.name.endsWith('.ods');
 
     const reader = new FileReader();
 
-    if (isExcel) {
+    if (isSpreadsheet) {
       reader.onload = (e) => {
         try {
           const data = e.target?.result;
@@ -17,7 +18,30 @@ export const parseDataFile = (file: File): Promise<RawDataRow[]> => {
              reject("Empty file");
              return;
           }
-          const workbook = XLSX.read(data, { type: 'binary' });
+
+          // Suppress noisy ODS warnings from SheetJS
+          const originalConsoleLog = console.log;
+          const originalConsoleError = console.error;
+          
+          const suppressMsg = (args: any[]) => 
+            args.some(a => typeof a === 'string' && a.includes('ODS number format'));
+
+          console.log = (...args) => {
+            if (!suppressMsg(args)) originalConsoleLog.apply(console, args);
+          };
+          console.error = (...args) => {
+             if (!suppressMsg(args)) originalConsoleError.apply(console, args);
+          };
+
+          let workbook;
+          try {
+            // Use type: 'array' for ArrayBuffer which is more robust for binary formats like ODS
+            workbook = XLSX.read(data, { type: 'array' });
+          } finally {
+            console.log = originalConsoleLog;
+            console.error = originalConsoleError;
+          }
+
           const sheetName = workbook.SheetNames[0];
           const sheet = workbook.Sheets[sheetName];
           const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 }); // Array of arrays
@@ -48,7 +72,8 @@ export const parseDataFile = (file: File): Promise<RawDataRow[]> => {
           reject(err);
         }
       };
-      reader.readAsBinaryString(file);
+      // Read as ArrayBuffer for better binary support (XLSX/ODS)
+      reader.readAsArrayBuffer(file);
     } else {
       // CSV handling
       reader.onload = (e) => {
