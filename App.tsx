@@ -4,7 +4,7 @@ import {
   ColumnMapping, CodingStatus, CodedResult, ReferenceEntry 
 } from './types';
 import { 
-  parseDataFile, exportToCSV 
+  parseDataFile, exportData 
 } from './utils/csvHelper';
 import { 
   codeSingleOccupation, suggestCodes 
@@ -661,19 +661,119 @@ const KnowledgeBaseView = () => {
     );
 };
 
-const DashboardView = () => (
-    <div className="p-8 max-w-6xl mx-auto">
-        <h2 className="text-3xl font-bold text-white mb-6">Analytics Dashboard</h2>
-        <div className="bg-slate-800 rounded-xl border border-slate-700 p-8 flex items-center justify-center min-h-[400px]">
-            <div className="text-center">
-                <BarChartIcon className="w-16 h-16 text-slate-700 mx-auto mb-4" />
-                <h3 className="text-xl font-bold text-slate-500">Data Visualization</h3>
-                <p className="text-slate-600 mt-2">Charts will appear here after coding data.</p>
-                {/* Treemap implementation would go here using a charting library */}
+const DashboardView: React.FC<{ rows: ProcessedRow[] }> = ({ rows }) => {
+    // Real-time calculation of statistics
+    const totalRows = rows.length;
+    const codedRows = rows.filter(r => r.codingStatus === 'coded').length;
+    const completionRate = totalRows > 0 ? Math.round((codedRows / totalRows) * 100) : 0;
+    
+    // Confidence distribution
+    const confidenceStats = rows.reduce((acc, row) => {
+        if (row.codingStatus === 'coded' && row.result) {
+            const conf = row.result.confidence || 'Unknown';
+            acc[conf] = (acc[conf] || 0) + 1;
+        }
+        return acc;
+    }, {} as Record<string, number>);
+
+    // Top Codes
+    const codeStats = rows.reduce((acc, row) => {
+         if (row.codingStatus === 'coded' && row.result?.code) {
+             const code = row.result.code;
+             acc[code] = (acc[code] || 0) + 1;
+         }
+         return acc;
+    }, {} as Record<string, number>);
+
+    const topCodes = Object.entries(codeStats)
+        .sort(([,a], [,b]) => b - a)
+        .slice(0, 5);
+
+    return (
+        <div className="p-8 max-w-6xl mx-auto space-y-8">
+            <h2 className="text-3xl font-bold text-white mb-6">Analytics Dashboard</h2>
+            
+            {/* KPI Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg">
+                    <div className="text-slate-400 text-sm font-bold uppercase mb-2">Total Records</div>
+                    <div className="text-4xl font-bold text-white">{totalRows}</div>
+                    <div className="text-xs text-slate-500 mt-2">Loaded from dataset</div>
+                </div>
+                <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg">
+                    <div className="text-slate-400 text-sm font-bold uppercase mb-2">Completion Rate</div>
+                    <div className="text-4xl font-bold text-blue-400">{completionRate}%</div>
+                    <div className="w-full bg-slate-700 h-1.5 rounded-full mt-3">
+                        <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${completionRate}%` }}></div>
+                    </div>
+                </div>
+                <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg">
+                    <div className="text-slate-400 text-sm font-bold uppercase mb-2">Processed</div>
+                    <div className="text-4xl font-bold text-emerald-400">{codedRows}</div>
+                    <div className="text-xs text-slate-500 mt-2">Automatically or Manually Coded</div>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Confidence Distribution */}
+                <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg">
+                    <h3 className="text-lg font-bold text-white mb-6 flex items-center gap-2">
+                        <PieChartIcon className="w-5 h-5 text-purple-400" /> Confidence Distribution
+                    </h3>
+                    <div className="space-y-4">
+                        {['High', 'Medium', 'Low', 'Manual', 'Reference'].map(conf => {
+                            const count = confidenceStats[conf] || 0;
+                            const pct = codedRows > 0 ? (count / codedRows) * 100 : 0;
+                            const color = 
+                                conf === 'High' || conf === 'Reference' ? 'bg-emerald-500' :
+                                conf === 'Medium' ? 'bg-amber-500' :
+                                conf === 'Manual' ? 'bg-blue-500' : 'bg-red-500';
+                            
+                            return (
+                                <div key={conf}>
+                                    <div className="flex justify-between text-sm mb-1">
+                                        <span className="text-slate-300">{conf}</span>
+                                        <span className="text-slate-400 font-mono">{count} ({Math.round(pct)}%)</span>
+                                    </div>
+                                    <div className="w-full bg-slate-700 h-2 rounded-full overflow-hidden">
+                                        <div className={`h-full ${color}`} style={{ width: `${pct}%` }}></div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                {/* Top Codes */}
+                <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg">
+                    <h3 className="text-lg font-bold text-white mb-6 flex items-center gap-2">
+                        <BarChartIcon className="w-5 h-5 text-indigo-400" /> Top 5 Codes
+                    </h3>
+                    {topCodes.length > 0 ? (
+                        <div className="space-y-4">
+                            {topCodes.map(([code, count], idx) => {
+                                const max = topCodes[0][1];
+                                const width = (count / max) * 100;
+                                return (
+                                    <div key={code} className="flex items-center gap-3">
+                                        <div className="w-12 text-right font-mono text-blue-300 font-bold text-sm">{code}</div>
+                                        <div className="flex-1">
+                                            <div className="bg-indigo-600/50 h-6 rounded flex items-center px-2 text-xs text-white" style={{ width: `${width}%`, minWidth: '2rem' }}>
+                                                {count}
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        <div className="text-center text-slate-500 py-10">No coded data available yet.</div>
+                    )}
+                </div>
             </div>
         </div>
-    </div>
-);
+    );
+};
 
 const RoadmapView = () => (
     <div className="p-8 text-slate-300">
@@ -1028,9 +1128,18 @@ function App() {
                           ) : codingStatus === CodingStatus.Paused ? (
                               <button onClick={handleResume} className="px-6 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/50 rounded-lg font-bold hover:bg-emerald-500/20">Resume</button>
                           ) : (
-                              <button onClick={() => exportToCSV(processedRows, 'coded_results.csv')} className="px-6 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-500 shadow-lg flex items-center gap-2">
-                                  <DownloadIcon className="w-4 h-4" /> Export CSV
-                              </button>
+                              <div className="flex gap-2">
+                                <span className="text-slate-400 text-xs font-bold uppercase self-center mr-2">Export As:</span>
+                                <button onClick={() => exportData(processedRows, 'statcode_results', 'csv')} className="px-3 py-2 bg-blue-600 text-white rounded font-bold hover:bg-blue-500 flex items-center gap-1 text-sm">
+                                    <FileSpreadsheetIcon className="w-4 h-4" /> CSV
+                                </button>
+                                <button onClick={() => exportData(processedRows, 'statcode_results', 'xlsx')} className="px-3 py-2 bg-emerald-600 text-white rounded font-bold hover:bg-emerald-500 flex items-center gap-1 text-sm">
+                                    <FileSpreadsheetIcon className="w-4 h-4" /> Excel
+                                </button>
+                                <button onClick={() => exportData(processedRows, 'statcode_results', 'ods')} className="px-3 py-2 bg-purple-600 text-white rounded font-bold hover:bg-purple-500 flex items-center gap-1 text-sm">
+                                    <FileSpreadsheetIcon className="w-4 h-4" /> ODS
+                                </button>
+                              </div>
                           )}
                       </div>
                   </div>
@@ -1064,7 +1173,7 @@ function App() {
     switch (activeModule) {
       case 'roadmap': return <RoadmapView />;
       case 'knowledge': return <KnowledgeBaseView />;
-      case 'dashboard': return <DashboardView />;
+      case 'dashboard': return <DashboardView rows={processedRows} />;
       default: return renderCodingView();
     }
   };
@@ -1082,7 +1191,7 @@ function App() {
 
       <Sidebar 
         activeModule={activeModule}
-        onModuleSelect={(m) => { setActiveModule(m); setCodingStatus(CodingStatus.Idle); setProcessedRows([]); }}
+        onModuleSelect={(m) => { setActiveModule(m); if(m !== 'dashboard') setCodingStatus(CodingStatus.Idle); }}
         onOpenSettings={() => setSettingsOpen(true)}
         currentProvider={settings.provider}
         onSaveSession={() => alert('Session Saved')}

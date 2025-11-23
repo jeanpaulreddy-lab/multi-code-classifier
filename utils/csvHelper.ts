@@ -1,4 +1,4 @@
-import { RawDataRow } from "../types";
+import { RawDataRow, ProcessedRow } from "../types";
 
 declare const XLSX: any;
 
@@ -122,27 +122,34 @@ export const parseDataFile = (file: File): Promise<RawDataRow[]> => {
   });
 };
 
-export const exportToCSV = (data: any[], filename: string) => {
-  if (data.length === 0) return;
+export const exportData = (rows: ProcessedRow[], baseFilename: string, format: 'csv' | 'xlsx' | 'ods') => {
+  if (rows.length === 0) return;
 
-  const headers = Object.keys(data[0]);
-  const csvContent = [
-    headers.join(','),
-    ...data.map(row => headers.map(fieldName => {
-      const val = row[fieldName] ? String(row[fieldName]).replace(/"/g, '""') : '';
-      return `"${val}"`;
-    }).join(','))
-  ].join('\n');
+  // Flatten and structure the data for export
+  const exportData = rows.map(row => {
+    // Extract internal fields to keep specific order or exclude them
+    const { id, result, codingStatus, errorMessage, manuallyEdited, primaryText, secondaryText, ...rest } = row;
+    
+    // Combine original data with results
+    return {
+      ID: id,
+      Input_Text: primaryText,
+      Context: secondaryText,
+      ...rest, // Other original columns
+      Code: result?.code || '',
+      Label: result?.label || '',
+      Confidence: result?.confidence || '',
+      Status: codingStatus,
+      Reasoning: result?.reasoning || '',
+      Manual_Edit: manuallyEdited ? 'Yes' : 'No',
+      Error: errorMessage || ''
+    };
+  });
 
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const link = document.createElement("a");
-  if (link.download !== undefined) {
-    const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute("download", filename);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  }
+  const worksheet = XLSX.utils.json_to_sheet(exportData);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Coded Data");
+
+  // Generate file
+  XLSX.writeFile(workbook, `${baseFilename}.${format}`);
 };
