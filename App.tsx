@@ -1939,6 +1939,13 @@ export default function App() {
       
       const promises = batchIndices.map(async (idx) => {
         const row = currentData[idx];
+
+        // SAFETY CHECK: Never overwrite manual edits during batch processing
+        // This ensures manually verified rows are protected when re-running batches
+        if (row.manuallyEdited) {
+            return;
+        }
+
         const primary = row[mapping.jobTitleColumn];
         const secondary = mapping.jobDescriptionColumn ? row[mapping.jobDescriptionColumn] : '';
         const tertiary = mapping.industryColumn ? row[mapping.industryColumn] : undefined;

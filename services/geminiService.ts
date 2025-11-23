@@ -26,7 +26,7 @@ const codingResponseSchema: Schema = {
     },
     reasoning: {
       type: Type.STRING,
-      description: "Brief explanation of why this code was chosen.",
+      description: "Brief explanation of why this code was chosen over alternatives.",
     },
   },
   required: ["code", "label", "confidence"],
@@ -180,27 +180,38 @@ export const codeSingleOccupation = async (
 
   let userPrompt = "";
 
+  // Standard Statistical Protocol Prompt Injection
+  // We instruct the model to think in 3 candidates and select the best one.
+  const protocolInstructions = `
+  STATISTICAL PROTOCOL:
+  1. Analyze the input text.
+  2. Identify the top 3 most likely classification codes based on the official index.
+  3. Compare the specific duties/details against the definitions of these 3 codes.
+  4. Select the SINGLE best fit.
+  5. In the 'reasoning' field, strictly state: "Selected [Code] because [Reason]. Alternatives considered: [Code B], [Code C]."
+  `;
+
   // Define Prompts
   if (module === ModuleType.ISCO08) {
     systemPrompt = "You are an expert statistician specializing in ISCO-08.";
-    userPrompt = `${contextInfo}Classify: Job Title: "${primaryText}", Description: "${secondaryText}". Return JSON with fields: code (4-digit string), label (string), confidence (High/Medium/Low), reasoning (string).`;
+    userPrompt = `${contextInfo}${protocolInstructions}\nTask: Classify Job Title: "${primaryText}", Description: "${secondaryText}".\nReturn JSON with fields: code (4-digit string), label (string), confidence (High/Medium/Low), reasoning (string).`;
   } else if (module === ModuleType.ISIC4) {
     systemPrompt = "You are an expert statistician specializing in ISIC Rev. 4.";
-    userPrompt = `${contextInfo}Classify: Activity: "${primaryText}", Details: "${secondaryText}". Return JSON with fields: code (4-digit string), label (string), confidence (High/Medium/Low), reasoning (string).`;
+    userPrompt = `${contextInfo}${protocolInstructions}\nTask: Classify Activity: "${primaryText}", Details: "${secondaryText}".\nReturn JSON with fields: code (4-digit string), label (string), confidence (High/Medium/Low), reasoning (string).`;
   } else if (module === ModuleType.COICOP) {
     systemPrompt = "You are an expert statistician specializing in COICOP 2018.";
-    userPrompt = `${contextInfo}Classify: Item: "${primaryText}", Context: "${secondaryText}". Return JSON with fields: code (4-digit string), label (string), confidence (High/Medium/Low), reasoning (string).`;
+    userPrompt = `${contextInfo}${protocolInstructions}\nTask: Classify Item: "${primaryText}", Context: "${secondaryText}".\nReturn JSON with fields: code (4-digit string), label (string), confidence (High/Medium/Low), reasoning (string).`;
   } else if (module === ModuleType.DUAL) {
     systemPrompt = "You are an expert statistician.";
     const industryInfo = tertiaryText || secondaryText;
-    userPrompt = `${contextInfo}Perform DUAL CODING for: Job Title: "${primaryText}", Industry: "${industryInfo}".
-      1. Determine ISCO-08 code.
-      2. Determine ISIC Rev. 4 code.
+    userPrompt = `${contextInfo}${protocolInstructions}\nTask: Perform DUAL CODING for: Job Title: "${primaryText}", Industry: "${industryInfo}".
+      1. Determine top ISCO-08 code candidates.
+      2. Determine top ISIC Rev. 4 code candidates.
       Return JSON:
       - code: "ISCO: <isco> / ISIC: <isic>"
       - label: "<isco_label> / <isic_label>"
       - confidence: "High" (if both high), else "Medium/Low"
-      - reasoning: "ISCO: <reason>. ISIC: <reason>."`;
+      - reasoning: "ISCO: <reason> (Alternatives: ...). ISIC: <reason> (Alternatives: ...)."`;
   }
 
   try {
@@ -213,7 +224,7 @@ export const codeSingleOccupation = async (
         config: {
           responseMimeType: "application/json",
           responseSchema: codingResponseSchema,
-          temperature: 0.1,
+          temperature: 0.1, // Low temp for deterministic coding
           systemInstruction: systemPrompt,
           thinkingConfig: settings.model?.includes('2.5') ? { thinkingBudget: 1024 } : undefined 
         },
