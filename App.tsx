@@ -3,7 +3,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { CodingStatus, RawDataRow, ProcessedRow, ColumnMapping, ModuleType, AIProvider, AISettings, SearchResult, CodedResult, ReferenceEntry } from './types';
 import { parseDataFile, exportToCSV } from './utils/csvHelper';
 import { codeSingleOccupation, searchClassification, suggestCodes } from './services/geminiService';
-import { addReferenceEntries, findReferenceMatch, getReferenceStats, clearReferenceData } from './services/dbService';
+import { addReferenceEntries, findReferenceMatch, findSimilarReferences, getReferenceStats, clearReferenceData } from './services/dbService';
 import { 
   UploadIcon, 
   FileSpreadsheetIcon, 
@@ -986,6 +986,39 @@ const InteractiveMode: React.FC<{ settings: AISettings }> = ({ settings }) => {
   );
 };
 
+// --- Component: Treemap (Simple implementation for Dashboard) ---
+const Treemap: React.FC<{ data: { label: string, count: number }[] }> = ({ data }) => {
+    const total = data.reduce((sum, item) => sum + item.count, 0);
+    // Sort by count descending
+    const sorted = [...data].sort((a, b) => b.count - a.count).slice(0, 10); // Top 10
+    
+    // Assign colors based on index
+    const colors = ['bg-blue-500', 'bg-emerald-500', 'bg-indigo-500', 'bg-purple-500', 'bg-pink-500', 'bg-amber-500', 'bg-orange-500', 'bg-teal-500', 'bg-cyan-500', 'bg-rose-500'];
+
+    return (
+        <div className="w-full h-64 flex flex-wrap content-start gap-1">
+            {sorted.map((item, idx) => {
+                const percentage = (item.count / total) * 100;
+                // Min width to be visible, max to fit logic roughly
+                const flexBasis = `${Math.max(percentage, 10)}%`; 
+                const color = colors[idx % colors.length];
+
+                return (
+                    <div 
+                        key={idx} 
+                        className={`${color} text-white p-2 rounded-md flex flex-col justify-center items-center text-center overflow-hidden hover:opacity-90 transition-opacity cursor-default relative group grow`}
+                        style={{ flexBasis: flexBasis, minWidth: '80px', height: percentage > 30 ? '100%' : '48%' }}
+                        title={`${item.label}: ${item.count} (${percentage.toFixed(1)}%)`}
+                    >
+                         <div className="font-bold text-xs md:text-sm truncate w-full px-1">{item.label}</div>
+                         <div className="text-xs opacity-80">{item.count}</div>
+                    </div>
+                )
+            })}
+        </div>
+    )
+}
+
 // --- Component: DashboardView ---
 const DashboardView: React.FC<{ data: ProcessedRow[]; mapping: ColumnMapping }> = ({ data, mapping }) => {
   const total = data.length;
@@ -996,6 +1029,15 @@ const DashboardView: React.FC<{ data: ProcessedRow[]; mapping: ColumnMapping }> 
   
   const completionRate = total > 0 ? Math.round((coded / total) * 100) : 0;
   const qualityScore = coded > 0 ? Math.round((highConf / coded) * 100) : 0;
+
+  // Prepare Treemap Data
+  const labelCounts: Record<string, number> = {};
+  data.forEach(row => {
+      if (row.result?.label) {
+          labelCounts[row.result.label] = (labelCounts[row.result.label] || 0) + 1;
+      }
+  });
+  const treemapData = Object.entries(labelCounts).map(([label, count]) => ({ label, count }));
 
   return (
     <div className="p-8 max-w-6xl mx-auto space-y-8">
@@ -1022,6 +1064,21 @@ const DashboardView: React.FC<{ data: ProcessedRow[]; mapping: ColumnMapping }> 
              <div className="text-3xl font-bold text-red-500">{error}</div>
              <div className="text-xs text-slate-400 mt-1">Failed rows</div>
           </div>
+       </div>
+
+       {/* Treemap Visualization */}
+       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+           <div className="flex justify-between items-center mb-6">
+                <h3 className="font-bold text-slate-700">Top Occupations Distribution</h3>
+                <span className="text-xs text-slate-400">Hierarchical View</span>
+           </div>
+           {treemapData.length > 0 ? (
+               <Treemap data={treemapData} />
+           ) : (
+               <div className="h-64 bg-slate-50 rounded-lg flex items-center justify-center text-slate-400">
+                   Not enough data to visualize
+               </div>
+           )}
        </div>
 
        {/* Simple distribution bar */}
@@ -1109,6 +1166,26 @@ const DataMapping: React.FC<{
   const handleChange = (key: keyof ColumnMapping, value: string) => {
     setMapping({ ...mapping, [key]: value });
   };
+
+  // Smart Detection Hook
+  useEffect(() => {
+    if (headers.length > 0 && !mapping.jobTitleColumn) {
+        const newMapping = { ...mapping };
+        
+        // Simple Heuristic Detection
+        headers.forEach(h => {
+            const lower = h.toLowerCase();
+            if (/(title|occupation|prof|job)/.test(lower)) newMapping.jobTitleColumn = h;
+            if (/(desc|detail|task|note|text)/.test(lower)) newMapping.jobDescriptionColumn = h;
+            if (/(id|key|ref)/.test(lower)) newMapping.idColumn = h;
+            if (activeModule === ModuleType.DUAL && /(ind|activ|sect)/.test(lower)) newMapping.industryColumn = h;
+        });
+
+        if (newMapping.jobTitleColumn !== mapping.jobTitleColumn || newMapping.jobDescriptionColumn !== mapping.jobDescriptionColumn) {
+            setMapping(newMapping);
+        }
+    }
+  }, [headers, activeModule]);
 
   const isComplete = mapping.jobTitleColumn && mapping.jobDescriptionColumn && (activeModule !== ModuleType.DUAL || mapping.industryColumn);
 
@@ -1214,10 +1291,12 @@ const ResultsTable: React.FC<{
   activeModule: ModuleType;
   settings: AISettings;
   onAddToRef: (idx: number) => void;
-}> = ({ data, mapping, onAutoCode, onPauseCode, onRetryErrors, onRetryRow, onManualEdit, isProcessing, isPaused, onExport, activeModule, onAddToRef }) => {
+  onBulkUpdate: (ids: string[], action: 'delete' | 'accept') => void;
+}> = ({ data, mapping, onAutoCode, onPauseCode, onRetryErrors, onRetryRow, onManualEdit, isProcessing, isPaused, onExport, activeModule, onAddToRef, onBulkUpdate }) => {
   const [filter, setFilter] = useState<'all' | 'pending' | 'coded' | 'error' | 'low_conf'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const rowsPerPage = 10;
 
   const filteredData = data.filter(row => {
@@ -1255,6 +1334,21 @@ const ResultsTable: React.FC<{
     return 'bg-slate-100 text-slate-600';
   };
 
+  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.checked) {
+        setSelectedIds(new Set(currentRows.map(r => r.id)));
+    } else {
+        setSelectedIds(new Set());
+    }
+  };
+
+  const handleSelectRow = (id: string) => {
+    const newSelected = new Set(selectedIds);
+    if (newSelected.has(id)) newSelected.delete(id);
+    else newSelected.add(id);
+    setSelectedIds(newSelected);
+  };
+
   return (
     <div className="h-full flex flex-col bg-white">
       {/* Toolbar */}
@@ -1289,6 +1383,15 @@ const ResultsTable: React.FC<{
             </div>
         </div>
         <div className="flex items-center gap-3">
+            {selectedIds.size > 0 && (
+                <div className="flex items-center gap-2 mr-2 animate-in fade-in slide-in-from-right-4">
+                    <span className="text-xs text-slate-500 font-bold">{selectedIds.size} Selected</span>
+                    <button onClick={() => { onBulkUpdate(Array.from(selectedIds), 'delete'); setSelectedIds(new Set()); }} className="text-red-600 hover:bg-red-50 p-2 rounded">
+                        <TrashIcon className="w-4 h-4"/>
+                    </button>
+                </div>
+            )}
+
             <button onClick={onExport} className="btn-secondary flex items-center gap-2 text-sm px-4 py-2 rounded-lg border hover:bg-slate-50 bg-white text-slate-700 font-medium shadow-sm">
                <DownloadIcon className="w-4 h-4" /> Export
             </button>
@@ -1325,6 +1428,9 @@ const ResultsTable: React.FC<{
         <table className="w-full text-left border-collapse">
             <thead className="bg-slate-50 sticky top-0 z-10 text-xs font-bold text-slate-500 uppercase tracking-wider border-b border-slate-200 shadow-sm">
                 <tr>
+                    <th className="px-4 py-3 w-8">
+                        <input type="checkbox" onChange={handleSelectAll} className="rounded" />
+                    </th>
                     <th className="px-6 py-3 w-16">#</th>
                     <th className="px-6 py-3">Source Data</th>
                     <th className="px-6 py-3 w-32">Code</th>
@@ -1339,6 +1445,14 @@ const ResultsTable: React.FC<{
                     const globalIdx = (currentPage - 1) * rowsPerPage + idx;
                     return (
                     <tr key={row.id} className="hover:bg-slate-50/80 transition-colors group">
+                        <td className="px-4 py-4">
+                            <input 
+                                type="checkbox" 
+                                checked={selectedIds.has(row.id)}
+                                onChange={() => handleSelectRow(row.id)}
+                                className="rounded text-blue-600 focus:ring-blue-500"
+                            />
+                        </td>
                         <td className="px-6 py-4 text-xs text-slate-400 font-mono">{globalIdx + 1}</td>
                         <td className="px-6 py-4">
                             <div className="font-bold text-slate-800 text-sm">{row[mapping.jobTitleColumn]}</div>
@@ -1386,7 +1500,7 @@ const ResultsTable: React.FC<{
                 )})}
                 {filteredData.length === 0 && (
                     <tr>
-                        <td colSpan={7} className="text-center py-12 text-slate-400">
+                        <td colSpan={8} className="text-center py-12 text-slate-400">
                            No records found matching your filter.
                         </td>
                     </tr>
@@ -1714,7 +1828,29 @@ export default function App() {
     setStatus(CodingStatus.Review);
   };
 
-  // Core batch processing logic used by both AutoCode and Retry
+  // Improved Bulk Update for "Workflow"
+  const handleBulkUpdate = (ids: string[], action: 'delete' | 'accept') => {
+      const idSet = new Set(ids);
+      const newData = processedData.filter(row => {
+          if (action === 'delete') return !idSet.has(row.id);
+          return true;
+      });
+
+      if (action === 'accept') {
+          // Logic for 'accept' would typically move them to a 'Verified' state, currently just ensuring they are kept.
+          // For now, let's say 'accept' means marking confidence as 'Manual' (Verified)
+          newData.forEach(row => {
+              if (idSet.has(row.id) && row.result) {
+                  row.result.confidence = 'Manual'; 
+                  row.codingStatus = 'coded';
+              }
+          });
+      }
+
+      setProcessedData(newData);
+  };
+
+  // Non-blocking processing loop (Simulates Worker Performance)
   const processRows = async (indicesToProcess: number[]) => {
     if (indicesToProcess.length === 0 || activeModule === 'interactive' || activeModule === 'roadmap' || activeModule === 'dashboard' || activeModule === 'knowledge') return;
     
@@ -1726,8 +1862,9 @@ export default function App() {
     let completed = 0;
     const total = indicesToProcess.length;
 
-    // Work on a copy of the data
-    const newData = [...processedData];
+    // We process directly on state updates to allow partial UI refreshes
+    // But we avoid setting state too often to prevent lag
+    let currentData = [...processedData];
 
     for (let i = 0; i < total; i += batchSize) {
       if (stopProcessingRef.current) {
@@ -1735,23 +1872,26 @@ export default function App() {
         return;
       }
 
+      // Yield to main thread to keep UI responsive (Simulate Worker)
+      await new Promise(resolve => setTimeout(resolve, 0));
+
       const batchIndices = indicesToProcess.slice(i, i + batchSize);
       
       const promises = batchIndices.map(async (idx) => {
-        const row = newData[idx];
+        const row = currentData[idx];
         const primary = row[mapping.jobTitleColumn];
         const secondary = mapping.jobDescriptionColumn ? row[mapping.jobDescriptionColumn] : '';
         const tertiary = mapping.industryColumn ? row[mapping.industryColumn] : undefined;
         
-        // Set temporary state to pending for UI feedback
-        newData[idx] = { ...row, codingStatus: 'pending', errorMessage: undefined };
+        // Mark as pending
+        currentData[idx] = { ...row, codingStatus: 'pending', errorMessage: undefined };
 
         try {
           // 1. Check Local Dictionary (IndexedDB)
           const refMatch = await findReferenceMatch(primary, activeModule as ModuleType);
           
           if (refMatch) {
-             newData[idx] = { 
+             currentData[idx] = { 
                ...row, 
                codingStatus: 'coded', 
                result: {
@@ -1763,13 +1903,23 @@ export default function App() {
                errorMessage: undefined 
              };
           } else {
-             // 2. If no match, call AI
-             const result = await codeSingleOccupation(primary, secondary, activeModule as ModuleType, aiSettings, tertiary);
-             newData[idx] = { ...row, codingStatus: 'coded', result, errorMessage: undefined };
+             // 2. RAG: Find similar examples
+             const similarExamples = await findSimilarReferences(primary, activeModule as ModuleType);
+
+             // 3. Call AI with Few-Shot Context
+             const result = await codeSingleOccupation(
+                 primary, 
+                 secondary, 
+                 activeModule as ModuleType, 
+                 aiSettings, 
+                 tertiary, 
+                 similarExamples // Pass RAG examples
+             );
+             currentData[idx] = { ...row, codingStatus: 'coded', result, errorMessage: undefined };
           }
         } catch (e) {
           const msg = e instanceof Error ? e.message : "Unknown error";
-          newData[idx] = { ...row, codingStatus: 'error', errorMessage: msg };
+          currentData[idx] = { ...row, codingStatus: 'error', errorMessage: msg };
         }
       });
 
@@ -1778,8 +1928,10 @@ export default function App() {
       completed += batchIndices.length;
       setProgress((completed / total) * 100);
       
-      // Update state after every batch to visualize progress
-      setProcessedData([...newData]);
+      // Update state every 2 batches or at end to reduce re-renders
+      if (i % (batchSize * 2) === 0 || i + batchSize >= total) {
+          setProcessedData([...currentData]);
+      }
     }
 
     setStatus(CodingStatus.Review);
@@ -1878,6 +2030,14 @@ export default function App() {
     exportToCSV(exportData, filename);
   };
 
+  // Data Safety Indicator Logic
+  const getPrivacyShield = () => {
+      if (aiSettings.provider === AIProvider.Local) {
+          return { color: 'text-emerald-400', label: 'Strict Privacy (Local AI)' };
+      }
+      return { color: 'text-amber-400', label: 'Standard Privacy (Cloud AI)' };
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 flex">
       <Sidebar 
@@ -1928,6 +2088,14 @@ export default function App() {
           )}
           
           <div className="flex items-center gap-4">
+            {/* Privacy Shield Indicator */}
+            <div className="flex items-center gap-1.5 px-3 py-1 bg-slate-900 rounded-full shadow-inner" title={getPrivacyShield().label}>
+                <div className={`w-2 h-2 rounded-full ${getPrivacyShield().color === 'text-emerald-400' ? 'bg-emerald-400' : 'bg-amber-400'}`}></div>
+                <span className={`text-[10px] font-bold uppercase tracking-wider ${getPrivacyShield().color}`}>
+                    {aiSettings.provider === AIProvider.Local ? 'Local Mode' : 'Cloud Mode'}
+                </span>
+            </div>
+
             {status === CodingStatus.Processing || status === CodingStatus.Paused ? (
               <div className="w-64 h-2 bg-slate-100 rounded-full overflow-hidden">
                 <div 
@@ -2057,6 +2225,7 @@ export default function App() {
               activeModule={activeModule as ModuleType}
               settings={aiSettings}
               onAddToRef={handleAddToRef}
+              onBulkUpdate={handleBulkUpdate}
             />
           )}
         </main>

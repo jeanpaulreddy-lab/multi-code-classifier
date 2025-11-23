@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { CodedResult, ModuleType, AISettings, AIProvider, SearchResult } from "../types";
+import { CodedResult, ModuleType, AISettings, AIProvider, SearchResult, ReferenceEntry } from "../types";
 
 // Helper to initialize Gemini client (safe if env key is missing, will throw later if used)
 const getGeminiClient = (apiKey?: string) => {
@@ -48,9 +48,6 @@ async function callOpenAICompatible(
     headers["Authorization"] = `Bearer ${settings.apiKey}`;
   }
 
-  // DeepSeek specific header sometimes required, but Bearer usually works.
-  // We use standard chat completions endpoint structure.
-  
   const payload = {
     model: settings.model,
     messages: [
@@ -59,7 +56,6 @@ async function callOpenAICompatible(
     ],
     temperature: 0.1,
     ...(jsonMode && settings.provider === AIProvider.OpenAI ? { response_format: { type: "json_object" } } : {}),
-    // DeepSeek supports response_format: { type: 'json_object' } in beta, but text parsing is safer generally for now
   };
 
   const url = settings.baseUrl || (
@@ -86,7 +82,6 @@ async function callOpenAICompatible(
     if (!content) throw new Error("Empty response from AI provider");
 
     if (jsonMode) {
-      // Clean markdown code blocks if present (common in Local/DeepSeek)
       const jsonStr = content.replace(/```json\n|\n```|```/g, '').trim();
       return JSON.parse(jsonStr);
     }
@@ -167,26 +162,38 @@ export const codeSingleOccupation = async (
   secondaryText: string,
   module: ModuleType,
   settings: AISettings,
-  tertiaryText?: string
+  tertiaryText?: string,
+  examples: ReferenceEntry[] = []
 ): Promise<CodedResult> => {
   
   let systemPrompt = "";
+  let contextInfo = "";
+
+  // Build Few-Shot Prompt Context from Examples
+  if (examples.length > 0) {
+    contextInfo = "\n\nUse these similar past decisions from the dictionary as reference logic:\n";
+    examples.forEach(ex => {
+      contextInfo += `- Input: "${ex.term}" was coded as Code: ${ex.code} ("${ex.label}")\n`;
+    });
+    contextInfo += "\nApply similar logic to the new item below.\n";
+  }
+
   let userPrompt = "";
 
   // Define Prompts
   if (module === ModuleType.ISCO08) {
     systemPrompt = "You are an expert statistician specializing in ISCO-08.";
-    userPrompt = `Classify: Job Title: "${primaryText}", Description: "${secondaryText}". Return JSON with fields: code (4-digit string), label (string), confidence (High/Medium/Low), reasoning (string).`;
+    userPrompt = `${contextInfo}Classify: Job Title: "${primaryText}", Description: "${secondaryText}". Return JSON with fields: code (4-digit string), label (string), confidence (High/Medium/Low), reasoning (string).`;
   } else if (module === ModuleType.ISIC4) {
     systemPrompt = "You are an expert statistician specializing in ISIC Rev. 4.";
-    userPrompt = `Classify: Activity: "${primaryText}", Details: "${secondaryText}". Return JSON with fields: code (4-digit string), label (string), confidence (High/Medium/Low), reasoning (string).`;
+    userPrompt = `${contextInfo}Classify: Activity: "${primaryText}", Details: "${secondaryText}". Return JSON with fields: code (4-digit string), label (string), confidence (High/Medium/Low), reasoning (string).`;
   } else if (module === ModuleType.COICOP) {
     systemPrompt = "You are an expert statistician specializing in COICOP 2018.";
-    userPrompt = `Classify: Item: "${primaryText}", Context: "${secondaryText}". Return JSON with fields: code (4-digit string), label (string), confidence (High/Medium/Low), reasoning (string).`;
+    userPrompt = `${contextInfo}Classify: Item: "${primaryText}", Context: "${secondaryText}". Return JSON with fields: code (4-digit string), label (string), confidence (High/Medium/Low), reasoning (string).`;
   } else if (module === ModuleType.DUAL) {
     systemPrompt = "You are an expert statistician.";
     const industryInfo = tertiaryText || secondaryText;
-    userPrompt = `Perform DUAL CODING for: Job Title: "${primaryText}", Industry: "${industryInfo}".
+    userPrompt = `${contextInfo}Perform DUAL CODING for: Job Title: "${primaryText}", Industry: "${industryInfo}".
       1. Determine ISCO-08 code.
       2. Determine ISIC Rev. 4 code.
       Return JSON:
@@ -208,7 +215,6 @@ export const codeSingleOccupation = async (
           responseSchema: codingResponseSchema,
           temperature: 0.1,
           systemInstruction: systemPrompt,
-          // Only enable thinking for compatible models if specifically requested or default
           thinkingConfig: settings.model?.includes('2.5') ? { thinkingBudget: 1024 } : undefined 
         },
       });

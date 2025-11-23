@@ -72,56 +72,57 @@ const getEntriesByModule = async (module: ModuleType): Promise<ReferenceEntry[]>
     });
 };
 
-export const findReferenceMatch = async (term: string, module: ModuleType): Promise<ReferenceEntry | null> => {
-  const normalizedTerm = term.toLowerCase().trim();
-  const db = await initDB();
-
-  // 1. Try Exact Match First (Fastest)
-  const exactMatchPromise = new Promise<ReferenceEntry | null>((resolve, reject) => {
-    const transaction = db.transaction([STORE_NAME], 'readonly');
-    const store = transaction.objectStore(STORE_NAME);
-    // We can't use the 'term' index directly for exact match with module constraint easily without a compound index.
-    // However, given the cache logic below, we can rely on Fuse for exact matches too if we want, 
-    // but a direct cursor check is often cheaper for a quick hit if the DB isn't huge.
-    // Let's stick to the fuzzy logic primarily, but do a quick check if needed.
-    // Actually, let's proceed to Fuzzy logic which handles exact matches well if configured correctly.
-    resolve(null); 
-  });
-
-  // 2. Fuzzy Match Logic
-  try {
-    // Check if we have a cached Fuse instance for this module
+const getFuseInstance = async (module: ModuleType) => {
     if (!fuseCache[module]) {
         const entries = await getEntriesByModule(module);
         if (entries.length === 0) return null;
 
         const options = {
             keys: ['term'],
-            threshold: 0.3, // 0.0 = perfect match, 1.0 = match anything. 0.3 allows for typos.
+            threshold: 0.4, // Slightly looser for RAG suggestions
             includeScore: true,
-            ignoreLocation: true, // Search anywhere in the string
+            ignoreLocation: true, 
             useExtendedSearch: true
         };
         fuseCache[module] = new Fuse(entries, options);
     }
+    return fuseCache[module];
+};
 
-    const fuse = fuseCache[module];
+// Returns exact match or null
+export const findReferenceMatch = async (term: string, module: ModuleType): Promise<ReferenceEntry | null> => {
+  try {
+    const fuse = await getFuseInstance(module);
+    if (!fuse) return null;
+
     const results = fuse.search(term);
 
     if (results.length > 0) {
-        // Return the best match
-        // You could also enforce a stricter score check here if needed
-        // fuse.js score: 0 is perfect, 1 is mismatch.
-        // If score is very low (e.g. < 0.05), it's basically exact.
-        return results[0].item;
+        // Strict threshold for "Auto-Code" without AI
+        if (results[0].score && results[0].score < 0.1) {
+            return results[0].item;
+        }
     }
-
     return null;
-
   } catch (e) {
       console.error("Fuzzy search error", e);
       return null;
   }
+};
+
+// Returns top 3 similar entries for RAG (Retrieval Augmented Generation)
+export const findSimilarReferences = async (term: string, module: ModuleType): Promise<ReferenceEntry[]> => {
+    try {
+        const fuse = await getFuseInstance(module);
+        if (!fuse) return [];
+    
+        const results = fuse.search(term);
+        // Return top 3 matches to help the AI context
+        return results.slice(0, 3).map(r => r.item);
+      } catch (e) {
+          console.error("Similar search error", e);
+          return [];
+      }
 };
 
 export const getReferenceStats = async (): Promise<Record<ModuleType, number>> => {
