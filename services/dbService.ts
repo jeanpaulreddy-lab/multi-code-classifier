@@ -79,33 +79,37 @@ const getFuseInstance = async (module: ModuleType) => {
 
         const options = {
             keys: ['term'],
-            threshold: 0.4, // Slightly looser for RAG suggestions
+            threshold: 0.4, // Default threshold for RAG suggestions
             includeScore: true,
-            ignoreLocation: true, 
-            useExtendedSearch: true
+            ignoreLocation: true, // Search anywhere in the string
+            useExtendedSearch: true,
+            minMatchCharLength: 2 // Avoid matching single characters
         };
         fuseCache[module] = new Fuse(entries, options);
     }
     return fuseCache[module];
 };
 
-// Returns exact match or null
+// Returns exact-ish match (very low score) or null
 export const findReferenceMatch = async (term: string, module: ModuleType): Promise<ReferenceEntry | null> => {
   try {
     const fuse = await getFuseInstance(module);
     if (!fuse) return null;
 
+    if (!term || term.trim() === '') return null;
+
     const results = fuse.search(term);
 
     if (results.length > 0) {
-        // Strict threshold for "Auto-Code" without AI
+        // Strict threshold for "Auto-Code" without AI (0.0 is exact, 0.1 allows very minor typo)
         if (results[0].score && results[0].score < 0.1) {
             return results[0].item;
         }
     }
     return null;
   } catch (e) {
-      console.error("Fuzzy search error", e);
+      // Log specific context to help debug without crashing the batch process
+      console.error(`[DB Service Error] findReferenceMatch failed for module: ${module}, term: "${term?.substring(0, 50)}..."`, e);
       return null;
   }
 };
@@ -116,11 +120,13 @@ export const findSimilarReferences = async (term: string, module: ModuleType): P
         const fuse = await getFuseInstance(module);
         if (!fuse) return [];
     
+        if (!term || term.trim() === '') return [];
+
         const results = fuse.search(term);
         // Return top 3 matches to help the AI context
         return results.slice(0, 3).map(r => r.item);
       } catch (e) {
-          console.error("Similar search error", e);
+          console.error(`[DB Service Error] findSimilarReferences failed for module: ${module}, term: "${term?.substring(0, 50)}..."`, e);
           return [];
       }
 };

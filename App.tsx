@@ -36,7 +36,8 @@ import {
   BarChartIcon,
   PieChartIcon,
   TrendingUpIcon,
-  AlertTriangleIcon
+  AlertTriangleIcon,
+  RefreshCwIcon
 } from './components/Icons';
 
 // --- Constants & Metadata ---
@@ -467,7 +468,7 @@ const KnowledgeBaseView: React.FC = () => {
     );
 };
 
-// --- Component: Settings Modal ---
+// --- Component: SettingsModal ---
 const SettingsModal: React.FC<{
   isOpen: boolean;
   onClose: () => void;
@@ -477,12 +478,15 @@ const SettingsModal: React.FC<{
   const [localSettings, setLocalSettings] = useState<AISettings>(settings);
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState('');
+  const [fetchedModels, setFetchedModels] = useState<string[]>([]);
+  const [fetchingModels, setFetchingModels] = useState(false);
 
   useEffect(() => {
     if(isOpen) {
       setLocalSettings(settings);
       setTestStatus('idle');
       setTestMessage('');
+      setFetchedModels([]);
     }
   }, [isOpen, settings]);
 
@@ -516,6 +520,45 @@ const SettingsModal: React.FC<{
       baseUrl: defaultBaseUrl,
       apiKey: provider === AIProvider.Gemini ? '' : (provider === AIProvider.Local ? '' : prev.apiKey)
     }));
+  };
+
+  const handleFetchModels = async () => {
+    setFetchingModels(true);
+    setTestMessage('');
+    try {
+        let url = localSettings.baseUrl || "http://localhost:11434/v1/chat/completions";
+        
+        // Construct models endpoint (usually /v1/models at the root)
+        // Remove known chat suffixes
+        url = url.replace(/\/chat\/completions\/?$/, '');
+        url = url.replace(/\/v1\/?$/, ''); 
+        
+        // Append /v1/models
+        const modelsUrl = `${url}/v1/models`;
+
+        const res = await fetch(modelsUrl);
+        if (!res.ok) throw new Error("Failed to fetch models");
+        
+        const data = await res.json();
+        // Expecting OpenAI format: { data: [{ id: "model-name", ... }] }
+        if (data.data && Array.isArray(data.data)) {
+            const ids = data.data.map((m: any) => m.id);
+            setFetchedModels(ids);
+            setTestMessage(`Found ${ids.length} models`);
+            setTestStatus('success');
+            // Auto-select the first one if current model is default or empty
+            if (ids.length > 0 && (!localSettings.model || localSettings.model === 'qwen2.5:7b')) {
+                setLocalSettings(prev => ({ ...prev, model: ids[0] }));
+            }
+        } else {
+            throw new Error("Invalid response format");
+        }
+    } catch (e) {
+        setTestMessage("Could not fetch models automatically");
+        setTestStatus('error');
+    } finally {
+        setFetchingModels(false);
+    }
   };
 
   const handleTestConnection = async () => {
@@ -626,20 +669,37 @@ const SettingsModal: React.FC<{
                 <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Model Name</label>
                 {localSettings.provider === AIProvider.Local ? (
                   <>
-                    <input 
-                      type="text" 
-                      list="local-models"
-                      value={localSettings.model}
-                      onChange={(e) => setLocalSettings({...localSettings, model: e.target.value})}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-md text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none"
-                    />
+                    <div className="flex gap-2">
+                        <input 
+                        type="text" 
+                        list="local-models"
+                        value={localSettings.model}
+                        onChange={(e) => setLocalSettings({...localSettings, model: e.target.value})}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-md text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                        placeholder="Type or select model..."
+                        />
+                        <button 
+                            onClick={handleFetchModels}
+                            disabled={fetchingModels}
+                            className="px-3 py-2 bg-slate-100 border border-slate-300 rounded-md hover:bg-slate-200 text-slate-600 transition-colors"
+                            title="Fetch available models from Local API"
+                        >
+                            <RefreshCwIcon className={`w-4 h-4 ${fetchingModels ? 'animate-spin' : ''}`} />
+                        </button>
+                    </div>
                     <datalist id="local-models">
-                       <option value="llama3" />
-                       <option value="mistral" />
-                       <option value="qwen2.5:7b" />
-                       <option value="phi3" />
+                       {fetchedModels.length > 0 ? (
+                           fetchedModels.map(m => <option key={m} value={m} />)
+                       ) : (
+                           <>
+                            <option value="llama3" />
+                            <option value="mistral" />
+                            <option value="qwen2.5:7b" />
+                            <option value="phi3" />
+                           </>
+                       )}
                     </datalist>
-                    <p className="text-xs text-slate-400 mt-1">Type the exact model name used in Ollama/LM Studio.</p>
+                    <p className="text-xs text-slate-400 mt-1">Type the exact model name or click refresh to list from API.</p>
                   </>
                 ) : (
                   <select
