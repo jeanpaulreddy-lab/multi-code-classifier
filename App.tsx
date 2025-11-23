@@ -67,6 +67,25 @@ const MODULE_DETAILS = {
   }
 };
 
+// --- Models List ---
+const ONLINE_MODELS = {
+  [AIProvider.Gemini]: [
+    { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash (Recommended)' },
+    { id: 'gemini-2.0-flash-lite-preview-02-05', name: 'Gemini 2.0 Flash Lite' },
+    { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro' },
+    { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash' }
+  ],
+  [AIProvider.OpenAI]: [
+    { id: 'gpt-4o', name: 'GPT-4o (Recommended)' },
+    { id: 'gpt-4o-mini', name: 'GPT-4o Mini' },
+    { id: 'o1-mini', name: 'o1 Mini (Reasoning)' }
+  ],
+  [AIProvider.DeepSeek]: [
+    { id: 'deepseek-chat', name: 'DeepSeek V3 (Chat)' },
+    { id: 'deepseek-reasoner', name: 'DeepSeek R1 (Reasoner)' }
+  ]
+};
+
 // --- Roadmap Data & Component ---
 interface RoadmapItem {
   id: string;
@@ -473,7 +492,7 @@ const SettingsModal: React.FC<{
 
     switch(provider) {
       case AIProvider.Gemini:
-        defaultModel = 'gemini-2.5-flash';
+        defaultModel = 'gemini-2.0-flash';
         break;
       case AIProvider.OpenAI:
         defaultModel = 'gpt-4o';
@@ -495,7 +514,7 @@ const SettingsModal: React.FC<{
       provider,
       model: defaultModel,
       baseUrl: defaultBaseUrl,
-      apiKey: provider === AIProvider.Gemini ? '' : prev.apiKey // Clear key if switching back to Gemini default
+      apiKey: provider === AIProvider.Gemini ? '' : (provider === AIProvider.Local ? '' : prev.apiKey)
     }));
   };
 
@@ -605,13 +624,34 @@ const SettingsModal: React.FC<{
              {/* Dynamic Fields */}
              <div>
                 <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Model Name</label>
-                <input 
-                  type="text" 
-                  value={localSettings.model}
-                  onChange={(e) => setLocalSettings({...localSettings, model: e.target.value})}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-md text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none"
-                />
-                {localSettings.provider === AIProvider.Local && <p className="text-xs text-slate-400 mt-1">e.g., qwen2.5:7b, llama3, mistral</p>}
+                {localSettings.provider === AIProvider.Local ? (
+                  <>
+                    <input 
+                      type="text" 
+                      list="local-models"
+                      value={localSettings.model}
+                      onChange={(e) => setLocalSettings({...localSettings, model: e.target.value})}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-md text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                    />
+                    <datalist id="local-models">
+                       <option value="llama3" />
+                       <option value="mistral" />
+                       <option value="qwen2.5:7b" />
+                       <option value="phi3" />
+                    </datalist>
+                    <p className="text-xs text-slate-400 mt-1">Type the exact model name used in Ollama/LM Studio.</p>
+                  </>
+                ) : (
+                  <select
+                     value={localSettings.model}
+                     onChange={(e) => setLocalSettings({...localSettings, model: e.target.value})}
+                     className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-md text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none"
+                  >
+                     {(ONLINE_MODELS as any)[localSettings.provider]?.map((m: any) => (
+                        <option key={m.id} value={m.id}>{m.name}</option>
+                     ))}
+                  </select>
+                )}
              </div>
 
              {localSettings.provider !== AIProvider.Gemini && (
@@ -635,12 +675,13 @@ const SettingsModal: React.FC<{
              <div>
                 <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">
                    {localSettings.provider === AIProvider.Gemini ? "API Key (Optional Override)" : "API Key"}
+                   {localSettings.provider === AIProvider.Local && <span className="text-slate-400 font-normal ml-1 normal-case">(Not usually required)</span>}
                 </label>
                 <input 
                   type="password" 
                   value={localSettings.apiKey || ''}
                   onChange={(e) => setLocalSettings({...localSettings, apiKey: e.target.value})}
-                  placeholder={localSettings.provider === AIProvider.Gemini ? "Leave empty to use default env key" : "sk-..."}
+                  placeholder={localSettings.provider === AIProvider.Gemini ? "Leave empty to use default env key" : (localSettings.provider === AIProvider.Local ? "Optional for local models" : "sk-...")}
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-md text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none"
                 />
              </div>
@@ -1162,16 +1203,18 @@ const ResultsTable: React.FC<{
   data: ProcessedRow[];
   mapping: ColumnMapping;
   onAutoCode: () => void;
+  onPauseCode: () => void;
   onRetryErrors: () => void;
   onRetryRow: (idx: number) => void;
   onBatchCode: (ids: string[]) => void;
   onManualEdit: (idx: number) => void;
   isProcessing: boolean;
+  isPaused: boolean;
   onExport: () => void;
   activeModule: ModuleType;
   settings: AISettings;
   onAddToRef: (idx: number) => void;
-}> = ({ data, mapping, onAutoCode, onRetryErrors, onRetryRow, onManualEdit, isProcessing, onExport, activeModule, onAddToRef }) => {
+}> = ({ data, mapping, onAutoCode, onPauseCode, onRetryErrors, onRetryRow, onManualEdit, isProcessing, isPaused, onExport, activeModule, onAddToRef }) => {
   const [filter, setFilter] = useState<'all' | 'pending' | 'coded' | 'error' | 'low_conf'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
@@ -1256,14 +1299,24 @@ const ResultsTable: React.FC<{
             >
                Retry Errors
             </button>
-            <button 
-              onClick={onAutoCode}
-              disabled={isProcessing}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
-            >
-               <SparklesIcon className="w-4 h-4" />
-               {isProcessing ? 'Processing...' : 'Run Auto-Code'}
-            </button>
+            
+            {isProcessing ? (
+               <button 
+                 onClick={onPauseCode}
+                 className="bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm flex items-center gap-2 transition-all"
+               >
+                 <span className="w-2 h-2 rounded-full bg-white animate-pulse"></span>
+                 Pause
+               </button>
+            ) : (
+               <button 
+                 onClick={onAutoCode}
+                 className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
+               >
+                 <SparklesIcon className="w-4 h-4" />
+                 {isPaused ? 'Resume Auto-Code' : 'Run Auto-Code'}
+               </button>
+            )}
         </div>
       </div>
 
@@ -1527,7 +1580,7 @@ const loadSettings = (): AISettings => {
   }
   return {
     provider: AIProvider.Gemini,
-    model: "gemini-2.5-flash"
+    model: "gemini-2.0-flash"
   };
 };
 
@@ -1543,6 +1596,9 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   
+  // Pause/Resume Logic
+  const stopProcessingRef = useRef(false);
+
   // PWA State
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
 
@@ -1662,6 +1718,7 @@ export default function App() {
   const processRows = async (indicesToProcess: number[]) => {
     if (indicesToProcess.length === 0 || activeModule === 'interactive' || activeModule === 'roadmap' || activeModule === 'dashboard' || activeModule === 'knowledge') return;
     
+    stopProcessingRef.current = false;
     setStatus(CodingStatus.Processing);
     setProgress(0);
 
@@ -1673,6 +1730,11 @@ export default function App() {
     const newData = [...processedData];
 
     for (let i = 0; i < total; i += batchSize) {
+      if (stopProcessingRef.current) {
+        setStatus(CodingStatus.Paused);
+        return;
+      }
+
       const batchIndices = indicesToProcess.slice(i, i + batchSize);
       
       const promises = batchIndices.map(async (idx) => {
@@ -1731,6 +1793,10 @@ export default function App() {
       .filter(idx => idx !== -1);
     
     await processRows(uncodedIndices);
+  };
+
+  const handlePauseCode = () => {
+    stopProcessingRef.current = true;
   };
 
   const handleRetryErrors = async () => {
@@ -1844,6 +1910,7 @@ export default function App() {
                 <div className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${
                   status === CodingStatus.Idle ? 'bg-slate-100 text-slate-600' :
                   status === CodingStatus.Processing ? 'bg-amber-100 text-amber-700 animate-pulse' :
+                  status === CodingStatus.Paused ? 'bg-orange-100 text-orange-700' :
                   'bg-blue-100 text-blue-700'
                 }`}>
                   {status}
@@ -1854,14 +1921,17 @@ export default function App() {
                 {status === CodingStatus.Processing && (
                   <span className="text-sm text-slate-500">Processing batch job...</span>
                 )}
+                {status === CodingStatus.Paused && (
+                  <span className="text-sm text-orange-600 font-bold">Job Paused</span>
+                )}
              </div>
           )}
           
           <div className="flex items-center gap-4">
-            {status === CodingStatus.Processing ? (
+            {status === CodingStatus.Processing || status === CodingStatus.Paused ? (
               <div className="w-64 h-2 bg-slate-100 rounded-full overflow-hidden">
                 <div 
-                  className="h-full bg-blue-600 transition-all duration-300 ease-out"
+                  className={`h-full transition-all duration-300 ease-out ${status === CodingStatus.Paused ? 'bg-orange-400' : 'bg-blue-600'}`}
                   style={{ width: `${progress}%` }}
                 />
               </div>
@@ -1971,16 +2041,18 @@ export default function App() {
             </div>
           )}
 
-          {activeModule !== 'interactive' && activeModule !== 'roadmap' && activeModule !== 'dashboard' && activeModule !== 'knowledge' && (status === CodingStatus.Review || status === CodingStatus.Processing) && (
+          {activeModule !== 'interactive' && activeModule !== 'roadmap' && activeModule !== 'dashboard' && activeModule !== 'knowledge' && (status === CodingStatus.Review || status === CodingStatus.Processing || status === CodingStatus.Paused) && (
             <ResultsTable 
               data={processedData}
               mapping={mapping}
               onAutoCode={handleAutoCode}
+              onPauseCode={handlePauseCode}
               onRetryErrors={handleRetryErrors}
               onRetryRow={handleRetrySingleRow}
               onBatchCode={handleBatchCode}
               onManualEdit={(idx) => setEditingRowIndex(idx)}
               isProcessing={status === CodingStatus.Processing}
+              isPaused={status === CodingStatus.Paused}
               onExport={handleExport}
               activeModule={activeModule as ModuleType}
               settings={aiSettings}

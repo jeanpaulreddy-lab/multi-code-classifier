@@ -3,6 +3,7 @@ export enum CodingStatus {
   Idle = 'IDLE',
   Mapping = 'MAPPING',
   Processing = 'PROCESSING',
+  Paused = 'PAUSED',
   Review = 'REVIEW'
 }
 
