@@ -44,14 +44,16 @@ export enum ModuleType {
   DUAL = 'Dual Coding (ISCO + ISIC)'
 }
 
-export enum ProcessingMode {
-  Cloud = 'CLOUD',
+export enum AIProvider {
+  Gemini = 'GEMINI',
+  OpenAI = 'OPENAI',
+  DeepSeek = 'DEEPSEEK',
   Local = 'LOCAL'
 }
 
 export interface AISettings {
-  mode: ProcessingMode;
-  localUrl: string;
-  localModel: string;
-  apiKey?: string; // In case user wants to override env var in UI (optional)
+  provider: AIProvider;
+  apiKey?: string;     // User-supplied key for OpenAI/DeepSeek
+  baseUrl?: string;    // Override URL for Local/DeepSeek
+  model: string;       // Model name (e.g., 'gpt-4o', 'deepseek-chat', 'qwen2.5')
 }

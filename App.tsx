@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { CodingStatus, RawDataRow, ProcessedRow, ColumnMapping, ModuleType, ProcessingMode, AISettings, SearchResult, CodedResult } from './types';
+import { CodingStatus, RawDataRow, ProcessedRow, ColumnMapping, ModuleType, AIProvider, AISettings, SearchResult, CodedResult } from './types';
 import { parseDataFile, exportToCSV } from './utils/csvHelper';
 import { codeSingleOccupation, searchClassification, suggestCodes } from './services/geminiService';
 import { 
@@ -303,597 +303,6 @@ const RoadmapView: React.FC = () => {
   );
 };
 
-// --- Component: Dashboard / Analytics View ---
-const DashboardView: React.FC<{ data: ProcessedRow[], mapping: ColumnMapping }> = ({ data, mapping }) => {
-  
-  // Metrics Calculation
-  const total = data.length;
-  const coded = data.filter(r => r.codingStatus === 'coded').length;
-  const errors = data.filter(r => r.codingStatus === 'error').length;
-  const manual = data.filter(r => r.manuallyEdited).length;
-  
-  const highConf = data.filter(r => r.result?.confidence === 'High').length;
-  const medConf = data.filter(r => r.result?.confidence === 'Medium').length;
-  const lowConf = data.filter(r => r.result?.confidence === 'Low').length;
-
-  const avgConfidence = coded > 0 
-    ? Math.round(((highConf * 100) + (medConf * 75) + (lowConf * 50)) / coded) 
-    : 0;
-
-  // Top Codes
-  const codeFrequency: Record<string, { count: number, label: string }> = {};
-  data.forEach(row => {
-    if (row.codingStatus === 'coded' && row.result) {
-      const code = row.result.code;
-      if (!codeFrequency[code]) codeFrequency[code] = { count: 0, label: row.result.label };
-      codeFrequency[code].count++;
-    }
-  });
-  const topCodes = Object.entries(codeFrequency)
-    .sort((a, b) => b[1].count - a[1].count)
-    .slice(0, 5);
-
-  // Low Confidence Watchlist
-  const lowConfItems = data
-    .filter(r => r.result?.confidence === 'Low' || r.codingStatus === 'error')
-    .slice(0, 10);
-
-  if (total === 0) {
-      return (
-        <div className="h-full flex flex-col items-center justify-center p-12 text-center">
-            <div className="p-6 bg-slate-100 rounded-full mb-4 text-slate-400">
-                <BarChartIcon className="w-12 h-12" />
-            </div>
-            <h2 className="text-xl font-bold text-slate-800">No Data Available</h2>
-            <p className="text-slate-500 mt-2">Start a session and process data to view analytics.</p>
-        </div>
-      )
-  }
-
-  return (
-    <div className="h-full flex flex-col bg-slate-50 p-8 overflow-y-auto custom-scrollbar">
-        <div className="mb-8">
-            <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-                <PieChartIcon className="w-6 h-6 text-blue-600" />
-                Analytics Dashboard
-            </h2>
-            <p className="text-slate-500">Real-time insights on coding accuracy and distribution.</p>
-        </div>
-
-        {/* KPI Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-                <div className="flex justify-between items-start mb-4">
-                    <div>
-                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Processed</p>
-                        <h3 className="text-3xl font-bold text-slate-800 mt-1">{coded} <span className="text-sm text-slate-400 font-normal">/ {total}</span></h3>
-                    </div>
-                    <div className="p-2 bg-blue-50 rounded-lg text-blue-600"><DatabaseIcon className="w-5 h-5" /></div>
-                </div>
-                <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                    <div className="bg-blue-600 h-full" style={{ width: `${(coded/total)*100}%` }}></div>
-                </div>
-            </div>
-
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-                <div className="flex justify-between items-start mb-4">
-                    <div>
-                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Avg. Confidence</p>
-                        <h3 className="text-3xl font-bold text-slate-800 mt-1">{avgConfidence}%</h3>
-                    </div>
-                    <div className="p-2 bg-emerald-50 rounded-lg text-emerald-600"><TrendingUpIcon className="w-5 h-5" /></div>
-                </div>
-                <p className="text-xs text-slate-500">Weighted score based on model certainty.</p>
-            </div>
-
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-                <div className="flex justify-between items-start mb-4">
-                    <div>
-                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Manual Edits</p>
-                        <h3 className="text-3xl font-bold text-slate-800 mt-1">{manual}</h3>
-                    </div>
-                    <div className="p-2 bg-orange-50 rounded-lg text-orange-600"><EditIcon className="w-5 h-5" /></div>
-                </div>
-                <p className="text-xs text-slate-500">{((manual/total)*100).toFixed(1)}% of total records edited.</p>
-            </div>
-
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-                <div className="flex justify-between items-start mb-4">
-                    <div>
-                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Errors / Low Conf</p>
-                        <h3 className="text-3xl font-bold text-slate-800 mt-1">{errors + lowConf}</h3>
-                    </div>
-                    <div className="p-2 bg-red-50 rounded-lg text-red-600"><AlertTriangleIcon className="w-5 h-5" /></div>
-                </div>
-                <p className="text-xs text-slate-500">Items requiring attention.</p>
-            </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-            {/* Confidence Distribution */}
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-                <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2">
-                    <BarChartIcon className="w-4 h-4 text-slate-400" />
-                    Confidence Distribution
-                </h3>
-                <div className="space-y-4">
-                    <div className="space-y-1">
-                        <div className="flex justify-between text-sm font-medium">
-                            <span className="text-green-700">High Confidence</span>
-                            <span className="text-slate-600">{highConf}</span>
-                        </div>
-                        <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
-                            <div className="bg-green-500 h-full rounded-full" style={{ width: `${total ? (highConf/total)*100 : 0}%` }}></div>
-                        </div>
-                    </div>
-                    <div className="space-y-1">
-                        <div className="flex justify-between text-sm font-medium">
-                            <span className="text-yellow-700">Medium Confidence</span>
-                            <span className="text-slate-600">{medConf}</span>
-                        </div>
-                        <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
-                            <div className="bg-yellow-500 h-full rounded-full" style={{ width: `${total ? (medConf/total)*100 : 0}%` }}></div>
-                        </div>
-                    </div>
-                    <div className="space-y-1">
-                        <div className="flex justify-between text-sm font-medium">
-                            <span className="text-orange-700">Low Confidence</span>
-                            <span className="text-slate-600">{lowConf}</span>
-                        </div>
-                        <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
-                            <div className="bg-orange-500 h-full rounded-full" style={{ width: `${total ? (lowConf/total)*100 : 0}%` }}></div>
-                        </div>
-                    </div>
-                    <div className="space-y-1">
-                        <div className="flex justify-between text-sm font-medium">
-                            <span className="text-slate-700">Manual / Errors</span>
-                            <span className="text-slate-600">{manual + errors}</span>
-                        </div>
-                        <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
-                            <div className="bg-slate-500 h-full rounded-full" style={{ width: `${total ? ((manual+errors)/total)*100 : 0}%` }}></div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Top Codes */}
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-                <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2">
-                    <TagIcon className="w-4 h-4 text-slate-400" />
-                    Most Frequent Codes
-                </h3>
-                <div className="overflow-hidden">
-                    <table className="w-full text-sm text-left">
-                        <thead className="text-xs text-slate-500 uppercase bg-slate-50 font-semibold">
-                            <tr>
-                                <th className="px-4 py-3 rounded-l-lg">Code</th>
-                                <th className="px-4 py-3">Label</th>
-                                <th className="px-4 py-3 text-right rounded-r-lg">Count</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                            {topCodes.map(([code, data]) => (
-                                <tr key={code} className="hover:bg-slate-50">
-                                    <td className="px-4 py-3 font-mono font-bold text-indigo-600">{code}</td>
-                                    <td className="px-4 py-3 text-slate-700 truncate max-w-[200px]">{data.label}</td>
-                                    <td className="px-4 py-3 text-right font-medium">{data.count}</td>
-                                </tr>
-                            ))}
-                            {topCodes.length === 0 && (
-                                <tr>
-                                    <td colSpan={3} className="px-4 py-8 text-center text-slate-400 italic">No codes assigned yet.</td>
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        {/* Watchlist */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-            <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2 text-red-600">
-                <AlertTriangleIcon className="w-4 h-4" />
-                Low Confidence Watchlist
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {lowConfItems.length > 0 ? lowConfItems.map((row) => (
-                    <div key={row.id} className="p-3 bg-red-50 rounded-lg border border-red-100 flex justify-between items-start">
-                        <div>
-                            <div className="font-medium text-slate-900 text-sm">{row[mapping.jobTitleColumn]}</div>
-                            <div className="text-xs text-red-500 mt-1">
-                                {row.codingStatus === 'error' ? 'Error: ' + row.errorMessage : `Low Confidence (${row.result?.code})`}
-                            </div>
-                        </div>
-                        {row.result && <span className="text-xs font-mono bg-white px-2 py-1 rounded border border-red-200 text-slate-600">{row.result.code}</span>}
-                    </div>
-                )) : (
-                    <div className="col-span-2 text-center py-8 text-slate-400 bg-slate-50 rounded-lg border border-dashed border-slate-200">
-                        Great job! No low confidence items detected.
-                    </div>
-                )}
-            </div>
-        </div>
-    </div>
-  );
-};
-
-// --- Component: Interactive Mode (Auto-Suggest & API Playground) ---
-const InteractiveMode: React.FC<{ settings: AISettings }> = ({ settings }) => {
-  const [activeTab, setActiveTab] = useState<'suggest' | 'api'>('suggest');
-  
-  // Suggest State
-  const [suggestInput, setSuggestInput] = useState('');
-  const [suggestions, setSuggestions] = useState<{code: string, label: string, confidence: string}[]>([]);
-  const [isSuggesting, setIsSuggesting] = useState(false);
-
-  // API State
-  const [apiJsonInput, setApiJsonInput] = useState('{\n  "title": "Software Engineer",\n  "description": "Developing react applications"\n}');
-  const [apiResponse, setApiResponse] = useState<string | null>(null);
-  const [apiLoading, setApiLoading] = useState(false);
-
-  // Debounce logic for suggestions
-  useEffect(() => {
-    const timer = setTimeout(async () => {
-        if (suggestInput.length > 2) {
-            setIsSuggesting(true);
-            const results = await suggestCodes(suggestInput, ModuleType.ISCO08, settings);
-            setSuggestions(results);
-            setIsSuggesting(false);
-        } else {
-            setSuggestions([]);
-        }
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [suggestInput, settings]);
-
-  const handleApiSimulate = async () => {
-    setApiLoading(true);
-    setApiResponse(null);
-    try {
-        const parsed = JSON.parse(apiJsonInput);
-        const title = parsed.title || "";
-        const desc = parsed.description || "";
-        
-        // Call the service directly to simulate an API hit
-        const result = await codeSingleOccupation(title, desc, ModuleType.ISCO08, settings);
-        
-        // Simulate network delay for realism
-        setTimeout(() => {
-             setApiResponse(JSON.stringify(result, null, 2));
-             setApiLoading(false);
-        }, 800);
-    } catch (e) {
-        setApiResponse(JSON.stringify({ error: "Invalid JSON input or API failure" }, null, 2));
-        setApiLoading(false);
-    }
-  };
-
-  return (
-    <div className="h-full flex flex-col bg-slate-50 p-8">
-        <div className="mb-6">
-            <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-                <ZapIcon className="w-6 h-6 text-amber-500" />
-                Interactive & API Playground
-            </h2>
-            <p className="text-slate-500">Test real-time coding capabilities and API integrations.</p>
-        </div>
-
-        <div className="flex gap-4 mb-6">
-            <button 
-                onClick={() => setActiveTab('suggest')}
-                className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${activeTab === 'suggest' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:bg-slate-200'}`}
-            >
-                <SparklesIcon className="w-4 h-4" />
-                Auto-Suggest Demo
-            </button>
-            <button 
-                onClick={() => setActiveTab('api')}
-                className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${activeTab === 'api' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:bg-slate-200'}`}
-            >
-                <TerminalIcon className="w-4 h-4" />
-                API Tester
-            </button>
-        </div>
-
-        <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm p-6 overflow-hidden">
-            {activeTab === 'suggest' && (
-                <div className="max-w-xl mx-auto mt-10">
-                    <h3 className="text-lg font-bold text-slate-800 mb-4 text-center">Real-time Auto-Complete</h3>
-                    <p className="text-sm text-slate-500 text-center mb-8">
-                        Simulates the coder experience. Start typing a job title to see real-time AI predictions from ISCO-08.
-                    </p>
-                    
-                    <div className="relative">
-                        <input 
-                            type="text"
-                            value={suggestInput}
-                            onChange={(e) => setSuggestInput(e.target.value)}
-                            placeholder="Type a job title (e.g., 'Nurse')..."
-                            className="w-full px-4 py-3 text-lg border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none shadow-sm"
-                        />
-                        {isSuggesting && (
-                            <div className="absolute right-4 top-1/2 -translate-y-1/2">
-                                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
-                            </div>
-                        )}
-                        
-                        {suggestions.length > 0 && (
-                            <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl z-20 overflow-hidden animate-in fade-in zoom-in-95">
-                                {suggestions.map((s, idx) => (
-                                    <div key={idx} className="p-3 hover:bg-blue-50 border-b border-slate-50 last:border-0 cursor-pointer">
-                                        <div className="flex justify-between items-center">
-                                            <span className="font-mono font-bold text-blue-600">{s.code}</span>
-                                            <span className={`text-xs px-2 py-0.5 rounded-full ${s.confidence === 'High' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>{s.confidence}</span>
-                                        </div>
-                                        <div className="text-slate-700 text-sm font-medium">{s.label}</div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                </div>
-            )}
-
-            {activeTab === 'api' && (
-                <div className="h-full flex flex-col md:flex-row gap-6">
-                    <div className="flex-1 flex flex-col">
-                        <label className="text-xs font-bold text-slate-500 uppercase mb-2">Request Payload (JSON)</label>
-                        <textarea 
-                            value={apiJsonInput}
-                            onChange={(e) => setApiJsonInput(e.target.value)}
-                            className="flex-1 p-4 font-mono text-sm bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none resize-none"
-                        />
-                        <button 
-                            onClick={handleApiSimulate}
-                            disabled={apiLoading}
-                            className="mt-4 px-4 py-2 bg-slate-900 text-white rounded-lg font-medium hover:bg-slate-800 disabled:opacity-50"
-                        >
-                            {apiLoading ? 'Sending Request...' : 'Send POST Request'}
-                        </button>
-                    </div>
-                    
-                    <div className="flex-1 flex flex-col">
-                        <label className="text-xs font-bold text-slate-500 uppercase mb-2">Response Output</label>
-                        <div className="flex-1 bg-slate-900 rounded-lg p-4 overflow-auto custom-scrollbar">
-                            {apiResponse ? (
-                                <pre className="text-emerald-400 font-mono text-sm whitespace-pre-wrap">{apiResponse}</pre>
-                            ) : (
-                                <div className="h-full flex items-center justify-center text-slate-600 font-mono text-sm">
-                                    Waiting for request...
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            )}
-        </div>
-    </div>
-  );
-};
-
-// --- Component: Manual Coding & Search Modal ---
-const ManualCodingModal: React.FC<{
-  isOpen: boolean;
-  onClose: () => void;
-  row: ProcessedRow | null;
-  mapping: ColumnMapping;
-  activeModule: ModuleType;
-  settings: AISettings;
-  onSave: (result: CodedResult) => void;
-}> = ({ isOpen, onClose, row, mapping, activeModule, settings, onSave }) => {
-  const [code, setCode] = useState('');
-  const [label, setLabel] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-
-  // Autocomplete State
-  const [suggestions, setSuggestions] = useState<{code: string, label: string}[]>([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
-
-  useEffect(() => {
-    if (isOpen && row) {
-      setCode(row.result?.code || '');
-      setLabel(row.result?.label || '');
-      setSearchQuery(row[mapping.jobTitleColumn] || '');
-      setSearchResults([]);
-      setSuggestions([]);
-    }
-  }, [isOpen, row, mapping]);
-
-  // Autocomplete logic for Label input
-  useEffect(() => {
-    const timer = setTimeout(async () => {
-      if (label.length > 2 && showSuggestions) {
-        const results = await suggestCodes(label, activeModule, settings);
-        setSuggestions(results);
-      } else {
-        setSuggestions([]);
-      }
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [label, showSuggestions, activeModule, settings]);
-
-  const handleSearch = async () => {
-    if (!searchQuery.trim()) return;
-    setIsSearching(true);
-    try {
-      const results = await searchClassification(searchQuery, activeModule, settings);
-      setSearchResults(results);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
-  const handleApplyResult = (res: SearchResult | {code: string, label: string}) => {
-    setCode(res.code);
-    setLabel(res.label);
-    setShowSuggestions(false);
-  };
-
-  const handleConfirm = () => {
-    onSave({
-      code,
-      label,
-      confidence: 'Manual',
-      reasoning: 'Manually edited by user.'
-    });
-    onClose();
-  };
-
-  if (!isOpen || !row) return null;
-
-  const primaryText = row[mapping.jobTitleColumn];
-  const secondaryText = mapping.jobDescriptionColumn ? row[mapping.jobDescriptionColumn] : '';
-
-  return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center backdrop-blur-sm p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl h-[80vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
-        
-        {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
-          <h3 className="font-bold text-slate-800 flex items-center gap-2">
-            <EditIcon className="w-5 h-5 text-blue-600" />
-            Manual Review & Coding
-          </h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl">&times;</button>
-        </div>
-
-        <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-          
-          {/* Left Panel: Input Data & Current Code */}
-          <div className="w-full md:w-1/3 border-r border-slate-200 p-6 overflow-y-auto bg-slate-50/50">
-            <div className="mb-6">
-              <h4 className="text-xs font-semibold uppercase text-slate-500 mb-2">Input Data</h4>
-              <div className="bg-white p-3 rounded border border-slate-200 shadow-sm mb-2">
-                <p className="font-bold text-slate-900 mb-1">{primaryText}</p>
-                {secondaryText && <p className="text-xs text-slate-500">{secondaryText}</p>}
-              </div>
-            </div>
-
-            <div>
-              <h4 className="text-xs font-semibold uppercase text-slate-500 mb-2">Assigned Code</h4>
-              <div className="space-y-3 relative">
-                <div>
-                  <label className="block text-xs text-slate-600 mb-1">Code</label>
-                  <input 
-                    type="text" 
-                    value={code} 
-                    onChange={(e) => setCode(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none"
-                  />
-                </div>
-                <div className="relative">
-                  <label className="block text-xs text-slate-600 mb-1">Label (Type to Auto-Complete)</label>
-                  <input 
-                    type="text" 
-                    value={label} 
-                    onChange={(e) => { setLabel(e.target.value); setShowSuggestions(true); }}
-                    onFocus={() => setShowSuggestions(true)}
-                    onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                    autoComplete="off"
-                  />
-                  {showSuggestions && suggestions.length > 0 && (
-                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-md shadow-lg z-50 max-h-48 overflow-y-auto">
-                      {suggestions.map((s, idx) => (
-                        <div 
-                          key={idx} 
-                          onClick={() => handleApplyResult(s)}
-                          className="px-3 py-2 hover:bg-blue-50 cursor-pointer border-b border-slate-50 last:border-0"
-                        >
-                          <div className="flex justify-between">
-                            <span className="font-bold text-xs text-blue-600 font-mono">{s.code}</span>
-                          </div>
-                          <div className="text-xs text-slate-700 truncate">{s.label}</div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Right Panel: Search & Explorer */}
-          <div className="flex-1 flex flex-col p-6 bg-white">
-            <div className="mb-4">
-              <h4 className="text-xs font-semibold uppercase text-slate-500 mb-2 flex items-center gap-1">
-                <SearchIcon className="w-3 h-3" />
-                Search {activeModule}
-              </h4>
-              <div className="flex gap-2">
-                <input 
-                  type="text" 
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                  className="flex-1 px-3 py-2 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                  placeholder={`Search for codes, keywords...`}
-                />
-                <button 
-                  onClick={handleSearch}
-                  disabled={isSearching}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-                >
-                  {isSearching ? 'Searching...' : 'Find'}
-                </button>
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto custom-scrollbar border border-slate-100 rounded-lg relative">
-              {isSearching ? (
-                 <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                 </div>
-              ) : searchResults.length > 0 ? (
-                <div className="divide-y divide-slate-100">
-                  {searchResults.map((res, idx) => (
-                    <button 
-                      key={idx} 
-                      onClick={() => handleApplyResult(res)}
-                      className="w-full text-left p-3 hover:bg-blue-50 transition-colors group"
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                         <span className="font-mono font-bold text-blue-700 text-sm">{res.code}</span>
-                         <span className="text-xs text-slate-400 hidden group-hover:inline-block">Click to Apply</span>
-                      </div>
-                      <div className="font-medium text-slate-800 text-sm mb-1">{res.label}</div>
-                      <div className="text-xs text-slate-500 line-clamp-2">{res.description}</div>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="h-full flex flex-col items-center justify-center text-slate-400">
-                  <ListIcon className="w-10 h-10 mb-2 opacity-20" />
-                  <p className="text-sm">Enter a term to search the classification.</p>
-                  <p className="text-xs mt-2 text-slate-300">Powered by AI Explorer</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800">Cancel</button>
-          <button 
-            onClick={handleConfirm}
-            disabled={!code}
-            className="px-4 py-2 text-sm font-medium bg-slate-900 text-white rounded-lg hover:bg-slate-800 shadow-sm disabled:opacity-50 flex items-center gap-2"
-          >
-            <CheckIcon className="w-4 h-4" />
-            Confirm Changes
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
 // --- Component: Settings Modal ---
 const SettingsModal: React.FC<{
   isOpen: boolean;
@@ -913,16 +322,68 @@ const SettingsModal: React.FC<{
     }
   }, [isOpen, settings]);
 
+  const handleProviderChange = (provider: AIProvider) => {
+    let defaultModel = '';
+    let defaultBaseUrl = '';
+
+    switch(provider) {
+      case AIProvider.Gemini:
+        defaultModel = 'gemini-2.5-flash';
+        break;
+      case AIProvider.OpenAI:
+        defaultModel = 'gpt-4o';
+        defaultBaseUrl = '';
+        break;
+      case AIProvider.DeepSeek:
+        defaultModel = 'deepseek-chat';
+        defaultBaseUrl = 'https://api.deepseek.com/chat/completions';
+        break;
+      case AIProvider.Local:
+        defaultModel = 'qwen2.5:7b';
+        defaultBaseUrl = 'http://localhost:11434/v1/chat/completions';
+        break;
+    }
+
+    setLocalSettings(prev => ({
+      ...prev,
+      provider,
+      model: defaultModel,
+      baseUrl: defaultBaseUrl,
+      apiKey: provider === AIProvider.Gemini ? '' : prev.apiKey // Clear key if switching back to Gemini default
+    }));
+  };
+
   const handleTestConnection = async () => {
     setTestStatus('testing');
     setTestMessage('');
     try {
-        // Attempt a minimal request to check connectivity
-        const response = await fetch(localSettings.localUrl, {
+        // Construct a minimal test payload
+        // Gemini uses a different library, so if Gemini is selected, we assume it works if we have a key (env or user)
+        // For others, we ping the URL.
+        if (localSettings.provider === AIProvider.Gemini) {
+           // Simple simulation for Gemini, as the client library handles connection
+           if (!process.env.API_KEY && !localSettings.apiKey) throw new Error("Missing API Key");
+           setTimeout(() => {
+             setTestStatus('success');
+             setTestMessage('Gemini Configured!');
+           }, 500);
+           return;
+        }
+
+        const url = localSettings.baseUrl || (
+           localSettings.provider === AIProvider.OpenAI ? "https://api.openai.com/v1/chat/completions" :
+           localSettings.provider === AIProvider.DeepSeek ? "https://api.deepseek.com/chat/completions" : 
+           "http://localhost:11434/v1/chat/completions"
+        );
+        
+        const headers: any = { "Content-Type": "application/json" };
+        if (localSettings.apiKey) headers["Authorization"] = `Bearer ${localSettings.apiKey}`;
+
+        const response = await fetch(url, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers,
             body: JSON.stringify({
-                model: localSettings.localModel,
+                model: localSettings.model,
                 messages: [{ role: "user", content: "Ping" }],
                 max_tokens: 1
             })
@@ -937,7 +398,7 @@ const SettingsModal: React.FC<{
         }
     } catch (e) {
         setTestStatus('error');
-        setTestMessage('Connection failed. Check URL/CORS.');
+        setTestMessage('Connection failed. Check URL/Key.');
     }
   };
 
@@ -945,7 +406,7 @@ const SettingsModal: React.FC<{
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center backdrop-blur-sm">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
           <h3 className="font-bold text-slate-800 flex items-center gap-2">
             <SettingsIcon className="w-5 h-5 text-slate-500" />
@@ -955,92 +416,117 @@ const SettingsModal: React.FC<{
         </div>
         
         <div className="p-6 space-y-6">
-          {/* Mode Toggle */}
+          {/* Provider Selection */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-3">Processing Mode</label>
-            <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-lg">
+            <label className="block text-sm font-medium text-slate-700 mb-2">AI Provider</label>
+            <div className="grid grid-cols-2 gap-2">
               <button
-                onClick={() => setLocalSettings({ ...localSettings, mode: ProcessingMode.Cloud })}
-                className={`py-2 px-4 rounded-md text-sm font-medium transition-all flex items-center justify-center gap-2 ${
-                  localSettings.mode === ProcessingMode.Cloud
-                    ? 'bg-white text-blue-600 shadow-sm'
-                    : 'text-slate-500 hover:text-slate-700'
+                onClick={() => handleProviderChange(AIProvider.Gemini)}
+                className={`py-2 px-3 rounded-lg text-sm font-medium border transition-all flex items-center justify-center gap-2 ${
+                  localSettings.provider === AIProvider.Gemini ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
                 }`}
               >
-                <WifiIcon className="w-4 h-4" />
-                Cloud (Gemini)
+                <img src="https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg" className="w-4 h-4" alt="Gemini" />
+                Google Gemini
               </button>
               <button
-                onClick={() => setLocalSettings({ ...localSettings, mode: ProcessingMode.Local })}
-                className={`py-2 px-4 rounded-md text-sm font-medium transition-all flex items-center justify-center gap-2 ${
-                  localSettings.mode === ProcessingMode.Local
-                    ? 'bg-white text-emerald-600 shadow-sm'
-                    : 'text-slate-500 hover:text-slate-700'
+                onClick={() => handleProviderChange(AIProvider.OpenAI)}
+                className={`py-2 px-3 rounded-lg text-sm font-medium border transition-all flex items-center justify-center gap-2 ${
+                  localSettings.provider === AIProvider.OpenAI ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
                 }`}
               >
-                <WifiOffIcon className="w-4 h-4" />
-                Local (Offline)
+                <div className="w-4 h-4 bg-emerald-600 rounded-sm"></div>
+                OpenAI (ChatGPT)
+              </button>
+              <button
+                onClick={() => handleProviderChange(AIProvider.DeepSeek)}
+                className={`py-2 px-3 rounded-lg text-sm font-medium border transition-all flex items-center justify-center gap-2 ${
+                  localSettings.provider === AIProvider.DeepSeek ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <div className="w-4 h-4 bg-indigo-600 rounded-full"></div>
+                DeepSeek
+              </button>
+              <button
+                onClick={() => handleProviderChange(AIProvider.Local)}
+                className={`py-2 px-3 rounded-lg text-sm font-medium border transition-all flex items-center justify-center gap-2 ${
+                  localSettings.provider === AIProvider.Local ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <ServerIcon className="w-4 h-4" />
+                Local / Ollama
               </button>
             </div>
-            <p className="text-xs text-slate-500 mt-2">
-              {localSettings.mode === ProcessingMode.Cloud 
-                ? "Uses Google Gemini API. Requires internet connection."
-                : "Uses a local LLM server (e.g., GPT-oss, Ollama). Works offline."}
-            </p>
           </div>
 
-          {/* Local Settings Fields */}
-          {localSettings.mode === ProcessingMode.Local && (
-            <div className="space-y-4 border-t border-slate-100 pt-4 animate-in slide-in-from-top-2">
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Local API URL</label>
-                <input 
-                  type="text" 
-                  value={localSettings.localUrl}
-                  onChange={(e) => setLocalSettings({...localSettings, localUrl: e.target.value})}
-                  placeholder="http://localhost:11434/v1/chat/completions"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-md text-sm font-mono focus:ring-2 focus:ring-emerald-500 outline-none"
-                />
-              </div>
-              <div>
+          <div className="space-y-4 border-t border-slate-100 pt-4">
+             {/* Dynamic Fields */}
+             <div>
                 <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Model Name</label>
                 <input 
                   type="text" 
-                  value={localSettings.localModel}
-                  onChange={(e) => setLocalSettings({...localSettings, localModel: e.target.value})}
-                  placeholder="llama3"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-md text-sm font-mono focus:ring-2 focus:ring-emerald-500 outline-none"
+                  value={localSettings.model}
+                  onChange={(e) => setLocalSettings({...localSettings, model: e.target.value})}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-md text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none"
                 />
+                {localSettings.provider === AIProvider.Local && <p className="text-xs text-slate-400 mt-1">e.g., qwen2.5:7b, llama3, mistral</p>}
+             </div>
+
+             {localSettings.provider !== AIProvider.Gemini && (
+               <div>
+                 <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">
+                   {localSettings.provider === AIProvider.Local ? "API Base URL" : "API Endpoint (Optional Override)"}
+                 </label>
+                 <input 
+                   type="text" 
+                   value={localSettings.baseUrl || ''}
+                   onChange={(e) => setLocalSettings({...localSettings, baseUrl: e.target.value})}
+                   placeholder={localSettings.provider === AIProvider.OpenAI ? "https://api.openai.com/v1/chat/completions" : "http://localhost:11434/v1/chat/completions"}
+                   className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-md text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                 />
+               </div>
+             )}
+
+             <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">
+                   {localSettings.provider === AIProvider.Gemini ? "API Key (Optional Override)" : "API Key"}
+                </label>
+                <input 
+                  type="password" 
+                  value={localSettings.apiKey || ''}
+                  onChange={(e) => setLocalSettings({...localSettings, apiKey: e.target.value})}
+                  placeholder={localSettings.provider === AIProvider.Gemini ? "Leave empty to use default env key" : "sk-..."}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-md text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+             </div>
+          </div>
+          
+          <div className="flex items-center justify-between pt-2">
+              <div className="text-xs flex-1 mr-4">
+                {testStatus === 'success' && (
+                  <span className="text-emerald-600 flex items-center gap-1 font-medium animate-in fade-in">
+                    <CheckCircleIcon className="w-3 h-3"/> {testMessage}
+                  </span>
+                )}
+                {testStatus === 'error' && (
+                  <span className="text-red-600 flex items-center gap-1 font-medium animate-in fade-in">
+                    <AlertCircleIcon className="w-3 h-3"/> {testMessage}
+                  </span>
+                )}
+                {testStatus === 'idle' && (
+                  <span className="text-slate-400 flex items-center gap-1">
+                    <ServerIcon className="w-3 h-3"/> Test connectivity
+                  </span>
+                )}
               </div>
-              
-              <div className="flex items-center justify-between pt-2">
-                 <div className="text-xs flex-1 mr-4">
-                   {testStatus === 'success' && (
-                     <span className="text-emerald-600 flex items-center gap-1 font-medium animate-in fade-in">
-                       <CheckCircleIcon className="w-3 h-3"/> {testMessage}
-                     </span>
-                   )}
-                   {testStatus === 'error' && (
-                     <span className="text-red-600 flex items-center gap-1 font-medium animate-in fade-in">
-                       <AlertCircleIcon className="w-3 h-3"/> {testMessage}
-                     </span>
-                   )}
-                   {testStatus === 'idle' && (
-                     <span className="text-slate-400 flex items-center gap-1">
-                       <ServerIcon className="w-3 h-3"/> Ensure server allows CORS
-                     </span>
-                   )}
-                 </div>
-                 <button 
-                   onClick={handleTestConnection}
-                   disabled={testStatus === 'testing'}
-                   className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded border border-slate-200 transition-colors font-medium disabled:opacity-50"
-                 >
-                   {testStatus === 'testing' ? 'Testing...' : 'Test Connection'}
-                 </button>
-              </div>
-            </div>
-          )}
+              <button 
+                onClick={handleTestConnection}
+                disabled={testStatus === 'testing'}
+                className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded border border-slate-200 transition-colors font-medium disabled:opacity-50"
+              >
+                {testStatus === 'testing' ? 'Testing...' : 'Test Connection'}
+              </button>
+          </div>
         </div>
 
         <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-3">
@@ -1062,13 +548,31 @@ const Sidebar: React.FC<{
   activeModule: ModuleType | 'interactive' | 'roadmap' | 'dashboard'; 
   onModuleSelect: (m: ModuleType | 'interactive' | 'roadmap' | 'dashboard') => void;
   onOpenSettings: () => void;
-  currentMode: ProcessingMode;
+  currentProvider: AIProvider;
   onSaveSession: () => void;
   onClearSession: () => void;
   canInstall: boolean;
   onInstall: () => void;
-}> = ({ activeModule, onModuleSelect, onOpenSettings, currentMode, onSaveSession, onClearSession, canInstall, onInstall }) => {
+}> = ({ activeModule, onModuleSelect, onOpenSettings, currentProvider, onSaveSession, onClearSession, canInstall, onInstall }) => {
   const [hoveredModule, setHoveredModule] = useState<ModuleType | 'interactive' | 'roadmap' | 'dashboard' | null>(null);
+
+  const getProviderIcon = (p: AIProvider) => {
+    switch(p) {
+      case AIProvider.Gemini: return <div className="w-2 h-2 rounded-full bg-blue-500"></div>;
+      case AIProvider.OpenAI: return <div className="w-2 h-2 rounded-full bg-emerald-500"></div>;
+      case AIProvider.DeepSeek: return <div className="w-2 h-2 rounded-full bg-indigo-500"></div>;
+      case AIProvider.Local: return <div className="w-2 h-2 rounded-full bg-amber-500"></div>;
+    }
+  }
+
+  const getProviderName = (p: AIProvider) => {
+    switch(p) {
+      case AIProvider.Gemini: return "Gemini AI";
+      case AIProvider.OpenAI: return "OpenAI";
+      case AIProvider.DeepSeek: return "DeepSeek";
+      case AIProvider.Local: return "Local AI";
+    }
+  }
 
   return (
     <div className="w-64 bg-slate-900 text-slate-300 flex flex-col h-screen fixed left-0 top-0 border-r border-slate-800 z-10 shadow-xl">
@@ -1186,343 +690,304 @@ const Sidebar: React.FC<{
         {canInstall && (
             <button 
             onClick={onInstall}
-            className="w-full flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors text-sm font-bold mb-2 shadow-md"
+            className="w-full flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors text-sm font-bold mb-2 shadow-md animate-pulse"
             >
             <DownloadIcon className="w-4 h-4" />
-            Install App
+            Install Desktop App
             </button>
         )}
 
         <button 
           onClick={onOpenSettings}
-          className="w-full flex items-center justify-between px-4 py-3 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors text-sm"
+          className="w-full flex items-center justify-between px-4 py-3 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors text-sm group"
         >
-          <div className="flex items-center gap-2 text-slate-300">
+          <div className="flex items-center gap-2 text-slate-300 group-hover:text-white">
             <SettingsIcon className="w-4 h-4" />
             <span>Settings</span>
           </div>
-          <div className={`w-2 h-2 rounded-full ${currentMode === ProcessingMode.Cloud ? 'bg-blue-500' : 'bg-emerald-500'}`} />
+          {getProviderIcon(currentProvider)}
         </button>
         <div className="mt-1 text-xs text-slate-600 text-center">
-          v1.7.1 &bull; {currentMode === ProcessingMode.Cloud ? 'Cloud Mode' : 'Offline Mode'}
+          v1.8.0 &bull; {getProviderName(currentProvider)}
         </div>
       </div>
     </div>
   );
 };
 
-// --- Component: Status Bar ---
-const StatusBar: React.FC<{ status: CodingStatus; progress: number; activeModule: ModuleType | 'interactive' | 'roadmap' | 'dashboard'; onShowHelp: () => void }> = ({ status, progress, activeModule, onShowHelp }) => {
-  if (activeModule === 'interactive') {
-      return (
-        <div className="bg-white border-b border-slate-200 px-8 py-4 sticky top-0 z-20 flex items-center justify-between shadow-sm">
-             <div className="flex items-center gap-4">
-                <div className="px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide bg-amber-100 text-amber-700">
-                    Interactive Mode
-                </div>
-             </div>
-        </div>
-      )
-  }
+// --- Component: InteractiveMode ---
+const InteractiveMode: React.FC<{ settings: AISettings }> = ({ settings }) => {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [mode, setMode] = useState<'search' | 'suggest'>('search');
 
-  if (activeModule === 'dashboard') {
-    return (
-      <div className="bg-white border-b border-slate-200 px-8 py-4 sticky top-0 z-20 flex items-center justify-between shadow-sm">
-           <div className="flex items-center gap-4">
-              <div className="px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide bg-emerald-100 text-emerald-700">
-                  Analytics Dashboard
-              </div>
-           </div>
-      </div>
-    )
-  }
-  
-  if (activeModule === 'roadmap') {
-    return (
-      <div className="bg-white border-b border-slate-200 px-8 py-4 sticky top-0 z-20 flex items-center justify-between shadow-sm">
-           <div className="flex items-center gap-4">
-              <div className="px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide bg-purple-100 text-purple-700">
-                  Project Management
-              </div>
-           </div>
-      </div>
-    )
-  }
+  const handleRun = async () => {
+    if (!query.trim()) return;
+    setLoading(true);
+    setResults([]);
+    try {
+       if (mode === 'search') {
+          const res = await searchClassification(query, ModuleType.ISCO08, settings);
+          setResults(res);
+       } else {
+          const res = await suggestCodes(query, ModuleType.ISCO08, settings);
+          setResults(res);
+       }
+    } catch (e) {
+       console.error(e);
+    } finally {
+       setLoading(false);
+    }
+  };
 
   return (
-    <div className="bg-white border-b border-slate-200 px-8 py-4 sticky top-0 z-20 flex items-center justify-between shadow-sm">
-      <div className="flex items-center gap-4">
-        <div className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${
-          status === CodingStatus.Idle ? 'bg-slate-100 text-slate-600' :
-          status === CodingStatus.Processing ? 'bg-amber-100 text-amber-700 animate-pulse' :
-          'bg-blue-100 text-blue-700'
-        }`}>
-          {status}
-        </div>
-        <span className="text-sm font-medium text-slate-800 border-l border-slate-200 pl-4">
-          Module: {activeModule}
-        </span>
-        {status === CodingStatus.Processing && (
-          <span className="text-sm text-slate-500">Processing batch job...</span>
-        )}
-      </div>
-      
-      <div className="flex items-center gap-4">
-        {status === CodingStatus.Processing ? (
-          <div className="w-64 h-2 bg-slate-100 rounded-full overflow-hidden">
-            <div 
-              className="h-full bg-blue-600 transition-all duration-300 ease-out"
-              style={{ width: `${progress}%` }}
-            />
+    <div className="p-8 max-w-4xl mx-auto">
+       <h2 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2">
+          <ZapIcon className="w-6 h-6 text-amber-500" />
+          Interactive API Sandbox
+       </h2>
+       
+       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 mb-8">
+          <div className="flex gap-4 mb-4">
+             <button onClick={() => setMode('search')} className={`px-4 py-2 rounded-lg text-sm font-bold border ${mode === 'search' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200'}`}>Semantic Search</button>
+             <button onClick={() => setMode('suggest')} className={`px-4 py-2 rounded-lg text-sm font-bold border ${mode === 'suggest' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200'}`}>Autocomplete Suggestion</button>
           </div>
-        ) : (
-          <button 
-            onClick={onShowHelp}
-            className="text-slate-400 hover:text-blue-600 transition-colors flex items-center gap-1 text-sm font-medium"
-          >
-            <HelpCircleIcon className="w-4 h-4" />
-            Module Info
-          </button>
-        )}
-      </div>
+          
+          <div className="flex gap-2">
+             <input 
+               value={query}
+               onChange={(e) => setQuery(e.target.value)}
+               placeholder={mode === 'search' ? "Search for 'software engineer'..." : "Type job title..."}
+               className="flex-1 p-3 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
+               onKeyDown={e => e.key === 'Enter' && handleRun()}
+             />
+             <button 
+               onClick={handleRun}
+               disabled={loading}
+               className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg disabled:opacity-50"
+             >
+               {loading ? 'Running...' : 'Execute'}
+             </button>
+          </div>
+       </div>
+
+       <div className="space-y-4">
+          {results.map((item, idx) => (
+             <div key={idx} className="bg-white p-4 rounded-lg shadow-sm border border-slate-200 hover:border-blue-300 transition-colors">
+                <div className="flex justify-between items-start">
+                   <h4 className="font-bold text-slate-800">{item.label}</h4>
+                   <span className="font-mono bg-slate-100 px-2 py-1 rounded text-xs font-bold text-slate-600">{item.code}</span>
+                </div>
+                <p className="text-sm text-slate-500 mt-1">{item.description || item.reasoning}</p>
+                {item.confidence && <div className="mt-2 text-xs font-bold text-slate-400">Confidence: {item.confidence}</div>}
+             </div>
+          ))}
+          {results.length === 0 && !loading && <div className="text-center text-slate-400 py-8">No results to display</div>}
+       </div>
     </div>
   );
 };
 
-// --- Component: File Upload ---
+// --- Component: DashboardView ---
+const DashboardView: React.FC<{ data: ProcessedRow[]; mapping: ColumnMapping }> = ({ data, mapping }) => {
+  const total = data.length;
+  const coded = data.filter(r => r.codingStatus === 'coded').length;
+  const pending = data.filter(r => r.codingStatus === 'pending').length;
+  const error = data.filter(r => r.codingStatus === 'error').length;
+  const highConf = data.filter(r => r.result?.confidence === 'High').length;
+  
+  const completionRate = total > 0 ? Math.round((coded / total) * 100) : 0;
+  const qualityScore = coded > 0 ? Math.round((highConf / coded) * 100) : 0;
+
+  return (
+    <div className="p-8 max-w-6xl mx-auto space-y-8">
+       <h2 className="text-2xl font-bold text-slate-800">Job Analytics</h2>
+       
+       <div className="grid grid-cols-4 gap-6">
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+             <div className="text-slate-500 text-xs font-bold uppercase mb-2">Completion Rate</div>
+             <div className="text-3xl font-bold text-blue-600">{completionRate}%</div>
+             <div className="text-xs text-slate-400 mt-1">{coded} of {total} rows</div>
+          </div>
+           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+             <div className="text-slate-500 text-xs font-bold uppercase mb-2">Quality Score</div>
+             <div className="text-3xl font-bold text-emerald-600">{qualityScore}%</div>
+             <div className="text-xs text-slate-400 mt-1">High confidence rate</div>
+          </div>
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+             <div className="text-slate-500 text-xs font-bold uppercase mb-2">Pending</div>
+             <div className="text-3xl font-bold text-amber-500">{pending}</div>
+             <div className="text-xs text-slate-400 mt-1">Rows waiting</div>
+          </div>
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+             <div className="text-slate-500 text-xs font-bold uppercase mb-2">Errors</div>
+             <div className="text-3xl font-bold text-red-500">{error}</div>
+             <div className="text-xs text-slate-400 mt-1">Failed rows</div>
+          </div>
+       </div>
+
+       {/* Simple distribution bar */}
+       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+          <h3 className="font-bold text-slate-700 mb-6">Confidence Distribution</h3>
+          <div className="flex items-end h-40 gap-4">
+             {['High', 'Medium', 'Low'].map(lvl => {
+                const count = data.filter(r => r.result?.confidence === lvl).length;
+                const pct = coded > 0 ? (count / coded) * 100 : 0;
+                return (
+                   <div key={lvl} className="flex-1 flex flex-col justify-end items-center group">
+                      <div className="text-xs font-bold text-slate-600 mb-2 opacity-0 group-hover:opacity-100 transition-opacity">{count}</div>
+                      <div 
+                        className={`w-full rounded-t-md transition-all duration-500 ${lvl === 'High' ? 'bg-emerald-500' : lvl === 'Medium' ? 'bg-blue-500' : 'bg-amber-500'}`} 
+                        style={{ height: `${pct}%` }} 
+                      />
+                      <div className="text-xs font-bold text-slate-500 mt-2 uppercase">{lvl}</div>
+                   </div>
+                )
+             })}
+          </div>
+       </div>
+    </div>
+  );
+};
+
+// --- Component: FileUpload ---
 const FileUpload: React.FC<{ onFileUpload: (data: RawDataRow[]) => void }> = ({ onFileUpload }) => {
-  const [dragActive, setDragActive] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleDrag = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") {
-      setDragActive(true);
-    } else if (e.type === "dragleave") {
-      setDragActive(false);
+  const handleFile = async (file: File) => {
+    try {
+      const data = await parseDataFile(file);
+      onFileUpload(data);
+    } catch (e) {
+      console.error("File parse error", e);
+      alert("Error parsing file. Ensure it is a valid CSV or Excel file.");
     }
-  }, []);
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFile(e.dataTransfer.files[0]);
-    }
-  }, []);
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    e.preventDefault();
-    if (e.target.files && e.target.files[0]) {
-      handleFile(e.target.files[0]);
-    }
-  };
-
-  const handleFile = (file: File) => {
-    setError(null);
-
-    // Valid extensions: .csv, .xlsx, .xls
-    const validExtensions = ['.csv', '.xlsx', '.xls'];
-    const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
-    
-    if (!validExtensions.includes(ext)) {
-      setError("Please upload a valid file (.csv or .xlsx).");
-      return;
-    }
-
-    if (file.size === 0) {
-      setError("The file is empty.");
-      return;
-    }
-
-    parseDataFile(file)
-      .then((data) => {
-        if (!data || data.length === 0) {
-          setError("Could not parse any data rows from the file.");
-          return;
-        }
-
-        // Basic validation: Check if we found columns
-        const firstRow = data[0];
-        const keys = Object.keys(firstRow).filter(k => k !== 'id');
-        if (keys.length === 0) {
-          setError("No valid columns found. Please ensure your file has headers.");
-          return;
-        }
-
-        onFileUpload(data);
-      })
-      .catch((err) => {
-        console.error(err);
-        setError("Error parsing file. Check format.");
-      });
   };
 
   return (
-    <div className="max-w-2xl mx-auto mt-12 text-center">
-      <h2 className="text-2xl font-bold text-slate-800 mb-2">Upload Raw Data</h2>
-      <p className="text-slate-500 mb-8">Upload your data file to begin coding.</p>
+    <div 
+      className="border-2 border-dashed border-slate-300 rounded-2xl p-12 text-center bg-white hover:bg-slate-50 hover:border-blue-400 transition-all cursor-pointer group"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => {
+        e.preventDefault();
+        if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+      }}
+    >
+      <div className="w-16 h-16 bg-blue-50 text-blue-500 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
+        <UploadIcon className="w-8 h-8" />
+      </div>
+      <h3 className="text-xl font-bold text-slate-800 mb-2">Upload Dataset</h3>
+      <p className="text-slate-500 mb-6">Drag and drop your CSV or Excel file here, or click to browse.</p>
       
-      <label
-        onDragEnter={handleDrag}
-        onDragLeave={handleDrag}
-        onDragOver={handleDrag}
-        onDrop={handleDrop}
-        className={`flex flex-col items-center justify-center w-full h-64 border-2 border-dashed rounded-xl cursor-pointer transition-all duration-200 ${
-          dragActive ? 'border-blue-500 bg-blue-50' : 'border-slate-300 bg-white hover:border-blue-400 hover:bg-slate-50'
-        }`}
-      >
-        <div className="flex flex-col items-center justify-center pt-5 pb-6">
-          <UploadIcon className={`w-10 h-10 mb-4 ${dragActive ? 'text-blue-500' : 'text-slate-400'}`} />
-          <p className="mb-2 text-sm text-slate-700">
-            <span className="font-semibold">Click to upload</span> or drag and drop
-          </p>
-          <p className="text-xs text-slate-500">CSV or Excel (.xlsx) (MAX. 5MB)</p>
-        </div>
-        <input type="file" className="hidden" accept=".csv,.xlsx,.xls" onChange={handleChange} />
+      <label className="inline-block">
+        <input 
+          type="file" 
+          accept=".csv, .xlsx, .xls" 
+          className="hidden" 
+          onChange={(e) => {
+            if (e.target.files?.[0]) handleFile(e.target.files[0]);
+          }}
+        />
+        <span className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg cursor-pointer transition-colors shadow-sm">
+          Select File
+        </span>
       </label>
-
-      {error && (
-        <div className="mt-4 p-4 bg-red-50 border border-red-100 rounded-lg text-red-700 flex items-center justify-center gap-2 animate-in slide-in-from-top-2">
-          <AlertCircleIcon className="w-5 h-5 flex-shrink-0" />
-          <span className="text-sm font-medium">{error}</span>
-        </div>
-      )}
     </div>
   );
 };
 
-// --- Component: Column Mapping ---
-const DataMapping: React.FC<{ 
-  headers: string[]; 
-  mapping: ColumnMapping; 
+// --- Component: DataMapping ---
+const DataMapping: React.FC<{
+  headers: string[];
+  mapping: ColumnMapping;
   setMapping: (m: ColumnMapping) => void;
   onConfirm: () => void;
   activeModule: ModuleType;
 }> = ({ headers, mapping, setMapping, onConfirm, activeModule }) => {
-  
   const handleChange = (key: keyof ColumnMapping, value: string) => {
     setMapping({ ...mapping, [key]: value });
   };
 
-  // Validation Logic
-  const hasDuplicate = mapping.jobTitleColumn && mapping.jobDescriptionColumn && mapping.jobTitleColumn === mapping.jobDescriptionColumn;
-  const isDual = activeModule === ModuleType.DUAL;
-  
-  // Ready Logic
-  let isReady = !!mapping.jobTitleColumn && !hasDuplicate;
-  if (isDual) {
-      // For dual coding, we generally want the industry column too
-      isReady = isReady && !!mapping.industryColumn;
-  }
-
-  // Dynamic labels based on module
-  let primaryLabel = "";
-  let primaryDesc = "";
-  let secondaryLabel = "";
-
-  switch (activeModule) {
-    case ModuleType.ISCO08:
-      primaryLabel = "Job Title Column *";
-      primaryDesc = "The main job title (e.g., 'Senior Data Analyst')";
-      secondaryLabel = "Description Column (Optional)";
-      break;
-    case ModuleType.ISIC4:
-      primaryLabel = "Main Activity / Description *";
-      primaryDesc = "Description of main economic activity";
-      secondaryLabel = "Business Name / Details (Optional)";
-      break;
-    case ModuleType.COICOP:
-      primaryLabel = "Item Name / Description *";
-      primaryDesc = "The product or service purchased (e.g., 'White Rice')";
-      secondaryLabel = "Merchant / Details (Optional)";
-      break;
-    case ModuleType.DUAL:
-      primaryLabel = "Job Title Column *";
-      primaryDesc = "The occupation text for ISCO coding";
-      secondaryLabel = "Additional Job Details (Optional)";
-      break;
-    default:
-      primaryLabel = "Primary Column *";
-      primaryDesc = "Main classification text";
-      secondaryLabel = "Secondary Column (Optional)";
-  }
+  const isComplete = mapping.jobTitleColumn && mapping.jobDescriptionColumn && (activeModule !== ModuleType.DUAL || mapping.industryColumn);
 
   return (
-    <div className="max-w-2xl mx-auto mt-12">
-      <div className="bg-white p-8 rounded-xl shadow-sm border border-slate-200">
-        <h2 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2">
-          <FileSpreadsheetIcon className="text-blue-600" />
-          Map Your Data Columns
-        </h2>
-        
-        <div className="bg-blue-50 border border-blue-100 rounded-md p-4 mb-6 text-sm text-blue-800">
-          Configuring for: <strong>{activeModule}</strong>
-        </div>
-        
-        <div className="space-y-6">
+    <div className="max-w-4xl mx-auto p-8">
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8">
+        <div className="flex items-center gap-4 mb-8">
+          <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold text-xl">2</div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">{primaryLabel}</label>
+            <h2 className="text-2xl font-bold text-slate-800">Map Columns</h2>
+            <p className="text-slate-500">Select which columns from your file correspond to the required fields.</p>
+          </div>
+        </div>
+
+        <div className="space-y-6 max-w-xl">
+          <div>
+            <label className="block text-sm font-bold text-slate-700 mb-2">Unique ID (Optional)</label>
             <select 
+              className="w-full p-3 bg-slate-50 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
+              value={mapping.idColumn}
+              onChange={(e) => handleChange('idColumn', e.target.value)}
+            >
+              <option value="id">Generate Automatically</option>
+              {headers.map(h => <option key={h} value={h}>{h}</option>)}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-bold text-slate-700 mb-2">
+               Primary Text <span className="text-red-500">*</span>
+               <span className="text-xs font-normal text-slate-400 ml-2">(e.g., Job Title, Product Name)</span>
+            </label>
+            <select 
+              className="w-full p-3 bg-slate-50 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
               value={mapping.jobTitleColumn}
               onChange={(e) => handleChange('jobTitleColumn', e.target.value)}
-              className="w-full p-2.5 bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500"
             >
-              <option value="">Select column...</option>
+              <option value="">Select Column...</option>
               {headers.map(h => <option key={h} value={h}>{h}</option>)}
             </select>
-            <p className="mt-1 text-xs text-slate-500">{primaryDesc}</p>
           </div>
-
-          {isDual && (
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">Industry / Activity Column *</label>
-                <select 
-                  value={mapping.industryColumn || ''}
-                  onChange={(e) => handleChange('industryColumn', e.target.value)}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500"
-                >
-                  <option value="">Select column...</option>
-                  {headers.map(h => <option key={h} value={h}>{h}</option>)}
-                </select>
-                <p className="mt-1 text-xs text-slate-500">Required for ISIC Rev. 4 coding context</p>
-              </div>
-          )}
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">{secondaryLabel}</label>
+            <label className="block text-sm font-bold text-slate-700 mb-2">
+               Secondary Text (Context) <span className="text-red-500">*</span>
+               <span className="text-xs font-normal text-slate-400 ml-2">(e.g., Job Description, Details)</span>
+            </label>
             <select 
+              className="w-full p-3 bg-slate-50 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
               value={mapping.jobDescriptionColumn}
               onChange={(e) => handleChange('jobDescriptionColumn', e.target.value)}
-              className="w-full p-2.5 bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500"
             >
-              <option value="">Select column... (None)</option>
+              <option value="">Select Column...</option>
               {headers.map(h => <option key={h} value={h}>{h}</option>)}
             </select>
           </div>
+
+          {activeModule === ModuleType.DUAL && (
+             <div>
+                <label className="block text-sm font-bold text-slate-700 mb-2">
+                   Industry / Activity <span className="text-red-500">*</span>
+                   <span className="text-xs font-normal text-slate-400 ml-2">(Required for Dual Coding)</span>
+                </label>
+                <select 
+                  className="w-full p-3 bg-slate-50 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
+                  value={mapping.industryColumn}
+                  onChange={(e) => handleChange('industryColumn', e.target.value)}
+                >
+                  <option value="">Select Column...</option>
+                  {headers.map(h => <option key={h} value={h}>{h}</option>)}
+                </select>
+             </div>
+          )}
         </div>
 
-        {hasDuplicate && (
-          <div className="mt-6 p-3 bg-red-50 text-red-700 text-sm rounded-md flex items-center gap-2">
-            <AlertCircleIcon className="w-4 h-4" />
-            Columns must be different.
-          </div>
-        )}
-
-        <div className="mt-8 flex justify-end">
-          <button
+        <div className="mt-10 pt-6 border-t border-slate-100 flex justify-end">
+          <button 
+            disabled={!isComplete}
             onClick={onConfirm}
-            disabled={!isReady}
-            className={`px-6 py-2.5 rounded-lg font-medium flex items-center gap-2 transition-all ${
-              isReady 
-                ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-md hover:shadow-lg' 
-                : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-            }`}
+            className="px-8 py-3 bg-blue-600 disabled:bg-slate-300 text-white font-bold rounded-lg shadow-sm hover:bg-blue-700 transition-colors flex items-center gap-2"
           >
-            Continue to Preview
-            <ArrowRightIcon className="w-4 h-4" />
+            Start Processing <ArrowRightIcon className="w-4 h-4" />
           </button>
         </div>
       </div>
@@ -1530,379 +995,253 @@ const DataMapping: React.FC<{
   );
 };
 
-// --- Component: Results Table ---
+// --- Component: ResultsTable ---
 const ResultsTable: React.FC<{
   data: ProcessedRow[];
   mapping: ColumnMapping;
   onAutoCode: () => void;
   onRetryErrors: () => void;
-  onRetryRow: (index: number) => void;
+  onRetryRow: (idx: number) => void;
   onBatchCode: (ids: string[]) => void;
-  onManualEdit: (index: number) => void;
+  onManualEdit: (idx: number) => void;
   isProcessing: boolean;
   onExport: () => void;
   activeModule: ModuleType;
   settings: AISettings;
-}> = ({ data, mapping, onAutoCode, onRetryErrors, onRetryRow, onBatchCode, onManualEdit, isProcessing, onExport, activeModule, settings }) => {
-  
-  const [page, setPage] = useState(0);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [confidenceFilter, setConfidenceFilter] = useState<string>('All');
-  const [textFilter, setTextFilter] = useState('');
-  const ROWS_PER_PAGE = 50;
-  
-  // Filtering Logic
+}> = ({ data, mapping, onAutoCode, onRetryErrors, onRetryRow, onManualEdit, isProcessing, onExport, activeModule }) => {
+  const [filter, setFilter] = useState<'all' | 'pending' | 'coded' | 'error' | 'low_conf'>('all');
+  const [currentPage, setCurrentPage] = useState(1);
+  const rowsPerPage = 10;
+
   const filteredData = data.filter(row => {
-    // Text Filter
-    const primary = row[mapping.jobTitleColumn]?.toString().toLowerCase() || '';
-    const secondary = mapping.jobDescriptionColumn ? (row[mapping.jobDescriptionColumn]?.toString().toLowerCase() || '') : '';
-    const matchesText = !textFilter || primary.includes(textFilter.toLowerCase()) || secondary.includes(textFilter.toLowerCase());
-
-    if (!matchesText) return false;
-
-    if (confidenceFilter === 'All') return true;
-    if (confidenceFilter === 'Error') return row.codingStatus === 'error';
-    if (confidenceFilter === 'Pending') return row.codingStatus === 'pending';
-    
-    // For coded results
-    if (row.codingStatus === 'coded' && row.result) {
-      return row.result.confidence === confidenceFilter;
-    }
-    
-    return false;
+    if (filter === 'all') return true;
+    if (filter === 'pending') return row.codingStatus === 'pending';
+    if (filter === 'error') return row.codingStatus === 'error';
+    if (filter === 'coded') return row.codingStatus === 'coded';
+    if (filter === 'low_conf') return row.result?.confidence === 'Low';
+    return true;
   });
 
-  const displayedData = filteredData.slice(page * ROWS_PER_PAGE, (page + 1) * ROWS_PER_PAGE);
-  const totalPages = Math.ceil(filteredData.length / ROWS_PER_PAGE);
+  const totalPages = Math.ceil(filteredData.length / rowsPerPage);
+  const currentRows = filteredData.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
 
-  // Reset page when filter changes
-  useEffect(() => {
-    setPage(0);
-  }, [confidenceFilter, textFilter]);
-
-  const codedCount = data.filter(r => r.codingStatus === 'coded').length;
-  const errorCount = data.filter(r => r.codingStatus === 'error').length;
-  const manualCount = data.filter(r => r.manuallyEdited).length;
-  const progressPercent = Math.round((codedCount / data.length) * 100);
-
-  // --- Selection Logic ---
-  const toggleSelectRow = (id: string) => {
-    const newSelected = new Set(selectedIds);
-    if (newSelected.has(id)) {
-      newSelected.delete(id);
-    } else {
-      newSelected.add(id);
-    }
-    setSelectedIds(newSelected);
+  const getStatusColor = (status: string, conf?: string) => {
+    if (status === 'error') return 'bg-red-100 text-red-700';
+    if (status === 'pending') return 'bg-slate-100 text-slate-600';
+    if (conf === 'High') return 'bg-emerald-100 text-emerald-700';
+    if (conf === 'Medium') return 'bg-blue-100 text-blue-700';
+    if (conf === 'Low') return 'bg-amber-100 text-amber-700';
+    return 'bg-slate-100 text-slate-600';
   };
-
-  const toggleSelectAllOnPage = () => {
-    const newSelected = new Set(selectedIds);
-    const allOnPageSelected = displayedData.every(row => newSelected.has(row.id));
-
-    if (allOnPageSelected) {
-      displayedData.forEach(row => newSelected.delete(row.id));
-    } else {
-      displayedData.forEach(row => newSelected.add(row.id));
-    }
-    setSelectedIds(newSelected);
-  };
-
-  const handleBatchCodeClick = () => {
-    if (selectedIds.size > 0) {
-      onBatchCode(Array.from(selectedIds));
-      setSelectedIds(new Set()); // Clear selection after triggering
-    }
-  };
-
-  const isAllOnPageSelected = displayedData.length > 0 && displayedData.every(row => selectedIds.has(row.id));
-
-  let codeHeader = "Code";
-  let labelHeader = "Label";
-
-  switch (activeModule) {
-    case ModuleType.ISCO08:
-      codeHeader = "ISCO Code";
-      labelHeader = "ISCO Label";
-      break;
-    case ModuleType.ISIC4:
-      codeHeader = "ISIC Code";
-      labelHeader = "ISIC Label";
-      break;
-    case ModuleType.COICOP:
-      codeHeader = "COICOP Code";
-      labelHeader = "COICOP Label";
-      break;
-    case ModuleType.DUAL:
-      codeHeader = "ISCO / ISIC";
-      labelHeader = "Description";
-      break;
-  }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="h-full flex flex-col bg-white">
       {/* Toolbar */}
-      <div className="px-8 py-6 flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-slate-800">Data Preview & Coding</h2>
-          <p className="text-slate-500 text-sm mt-1">
-            {codedCount} coded, {errorCount} errors, {manualCount} manual / {data.length} total ({progressPercent}%) using 
-            <span className={`ml-1 font-medium ${settings.mode === ProcessingMode.Cloud ? 'text-blue-600' : 'text-emerald-600'}`}>
-              {settings.mode === ProcessingMode.Cloud ? 'Cloud AI' : 'Local AI'}
-            </span>
-          </p>
+      <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+        <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-slate-600 mr-2">Filter:</span>
+            {['all', 'pending', 'coded', 'error', 'low_conf'].map((f) => (
+                <button
+                   key={f}
+                   onClick={() => setFilter(f as any)}
+                   className={`px-3 py-1 rounded-full text-xs font-bold capitalize transition-colors ${
+                      filter === f ? 'bg-slate-800 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:border-slate-300'
+                   }`}
+                >
+                    {f.replace('_', ' ')}
+                </button>
+            ))}
         </div>
-        
-        <div className="flex gap-3 items-center">
-           {/* Search */}
-           <div className="relative">
-             <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-             <input 
-                type="text" 
-                placeholder="Search rows..." 
-                value={textFilter}
-                onChange={(e) => setTextFilter(e.target.value)}
-                className="pl-9 pr-3 py-2 bg-white border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none shadow-sm"
-             />
-           </div>
-
-          {/* Confidence Filter */}
-          <div className="relative">
-            <FilterIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <select
-              value={confidenceFilter}
-              onChange={(e) => setConfidenceFilter(e.target.value)}
-              className="pl-9 pr-8 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium text-sm appearance-none outline-none focus:ring-2 focus:ring-blue-500 shadow-sm cursor-pointer h-full"
-            >
-              <option value="All">All Results</option>
-              <option value="High">High Confidence</option>
-              <option value="Medium">Medium Confidence</option>
-              <option value="Low">Low Confidence</option>
-              <option value="Manual">Manually Edited</option>
-              <option value="Error">Errors</option>
-              <option value="Pending">Pending</option>
-            </select>
-            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500">
-              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
-            </div>
-          </div>
-
-          <button
-            onClick={onExport}
-            className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium flex items-center gap-2"
-          >
-            <DownloadIcon className="w-4 h-4" />
-            Export
-          </button>
-          
-          {selectedIds.size > 0 && (
-            <button
-              onClick={handleBatchCodeClick}
-              disabled={isProcessing}
-              className={`px-4 py-2 rounded-lg font-medium flex items-center gap-2 shadow-sm transition-all animate-in fade-in slide-in-from-right-2 ${
-                isProcessing
-                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                  : 'bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100'
-              }`}
-            >
-              <SparklesIcon className="w-4 h-4" />
-              Code {selectedIds.size} Selected
+        <div className="flex items-center gap-3">
+            <button onClick={onExport} className="btn-secondary flex items-center gap-2 text-sm px-4 py-2 rounded-lg border hover:bg-slate-50">
+               <DownloadIcon className="w-4 h-4" /> Export
             </button>
-          )}
-
-          {errorCount > 0 && (
-            <button
+            <button 
               onClick={onRetryErrors}
               disabled={isProcessing}
-              className={`px-4 py-2 rounded-lg font-medium flex items-center gap-2 shadow-sm transition-all ${
-                isProcessing
-                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                  : 'bg-amber-100 text-amber-700 border border-amber-300 hover:bg-amber-200'
-              }`}
+              className="text-red-600 hover:bg-red-50 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
             >
-              <SparklesIcon className="w-4 h-4" />
-              Retry {errorCount} Failed
+               Retry Errors
             </button>
-          )}
-
-          <button
-            onClick={onAutoCode}
-            disabled={isProcessing || codedCount === data.length}
-            className={`px-6 py-2 rounded-lg font-medium flex items-center gap-2 shadow-md transition-all ${
-              isProcessing 
-                ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
-                : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-indigo-200'
-            }`}
-          >
-            {isProcessing ? (
-              <>Processing...</>
-            ) : (
-              <>
-                <SparklesIcon className="w-4 h-4" />
-                {codedCount > 0 && codedCount < data.length ? 'Resume Auto-Code' : 'Auto-Code with AI'}
-              </>
-            )}
-          </button>
+            <button 
+              onClick={onAutoCode}
+              disabled={isProcessing}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+               <SparklesIcon className="w-4 h-4" />
+               {isProcessing ? 'Processing...' : 'Run Auto-Code'}
+            </button>
         </div>
       </div>
 
-      {/* Table Container */}
-      <div className="flex-1 overflow-auto custom-scrollbar px-8 pb-8">
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-          <table className="w-full text-left text-sm text-slate-600">
-            <thead className="bg-slate-50 text-xs uppercase text-slate-500 font-semibold border-b border-slate-200 sticky top-0 z-10">
-              <tr>
-                <th className="px-4 py-4 w-10">
-                  <input 
-                    type="checkbox" 
-                    checked={isAllOnPageSelected}
-                    onChange={toggleSelectAllOnPage}
-                    className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
-                  />
-                </th>
-                <th className="px-4 py-4 w-16">#</th>
-                <th className="px-6 py-4 max-w-xs">Input Data</th>
-                <th className="px-6 py-4 w-32">{codeHeader}</th>
-                <th className="px-6 py-4">{labelHeader}</th>
-                <th className="px-6 py-4 w-32">Confidence</th>
-                <th className="px-6 py-4 w-64">Reasoning</th>
-                <th className="px-6 py-4 w-24 text-right">Actions</th>
-              </tr>
+      {/* Table */}
+      <div className="flex-1 overflow-auto">
+        <table className="w-full text-left border-collapse">
+            <thead className="bg-slate-50 sticky top-0 z-10 text-xs font-bold text-slate-500 uppercase tracking-wider border-b border-slate-200 shadow-sm">
+                <tr>
+                    <th className="px-6 py-3 w-16">#</th>
+                    <th className="px-6 py-3">Source Data</th>
+                    <th className="px-6 py-3 w-32">Code</th>
+                    <th className="px-6 py-3 w-48">Label</th>
+                    <th className="px-6 py-3 w-24">Conf.</th>
+                    <th className="px-6 py-3 w-64">Reasoning</th>
+                    <th className="px-6 py-3 w-24 text-right">Actions</th>
+                </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {displayedData.length === 0 ? (
-                 <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center text-slate-400">
-                       No rows match the filter.
-                    </td>
-                 </tr>
-              ) : displayedData.map((row, idx) => {
-                const realIndex = data.indexOf(row);
-                const isSelected = selectedIds.has(row.id);
-                const isLowConfidence = row.result?.confidence === 'Low' && row.codingStatus === 'coded';
-                const isError = row.codingStatus === 'error';
-                
-                return (
-                <tr 
-                  key={row.id} 
-                  className={`transition-colors 
-                    ${isSelected ? 'bg-blue-50/60' : ''} 
-                    ${isLowConfidence && !isSelected ? 'bg-orange-50/60' : ''}
-                    ${!isSelected && !isLowConfidence ? 'hover:bg-slate-50' : ''}
-                  `}
-                >
-                  <td className="px-4 py-4">
-                    <input 
-                      type="checkbox" 
-                      checked={isSelected}
-                      onChange={() => toggleSelectRow(row.id)}
-                      className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
-                    />
-                  </td>
-                  <td className="px-4 py-4 font-mono text-xs text-slate-400">
-                    {realIndex + 1}
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="font-medium text-slate-900">{row[mapping.jobTitleColumn]}</div>
-                    {mapping.industryColumn && (
-                        <div className="text-xs text-emerald-600 font-medium truncate max-w-[200px] mt-0.5" title="Industry Context">
-                            Ind: {row[mapping.industryColumn]}
-                        </div>
-                    )}
-                    {mapping.jobDescriptionColumn && (
-                      <div className="text-xs text-slate-400 truncate max-w-[200px]" title={row[mapping.jobDescriptionColumn]}>
-                        {row[mapping.jobDescriptionColumn]}
-                      </div>
-                    )}
-                  </td>
-                  <td className={`px-6 py-4 font-mono font-bold ${isError ? 'text-red-500' : 'text-indigo-600'}`}>
-                    {isError ? (
-                      <div className="group relative flex items-center gap-1 cursor-help">
-                        <span>ERR</span>
-                        <AlertCircleIcon className="w-4 h-4" />
-                        <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block w-64 bg-slate-800 text-white text-xs p-2 rounded shadow-lg z-20">
-                           <p className="font-bold mb-1 text-red-300">Coding Error:</p>
-                           {row.errorMessage}
-                        </div>
-                      </div>
-                    ) : (
-                      row.result?.code || '-'
-                    )}
-                  </td>
-                  <td className="px-6 py-4 text-slate-800">
-                    {isError ? '-' : (row.result?.label || '-')}
-                  </td>
-                  <td className="px-6 py-4">
-                    {isError ? (
-                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                        Failed
-                      </span>
-                    ) : row.result ? (
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${
-                        row.result.confidence === 'Manual' ? 'bg-slate-200 text-slate-800 border-slate-300' :
-                        row.result.confidence === 'High' ? 'bg-green-100 text-green-800 border-green-200' :
-                        row.result.confidence === 'Medium' ? 'bg-yellow-100 text-yellow-800 border-yellow-200' :
-                        'bg-orange-100 text-orange-800 border-orange-200 shadow-sm'
-                      }`}>
-                        {row.result.confidence}
-                        {row.result.confidence === 'Low' && <AlertCircleIcon className="w-3 h-3 ml-1"/>}
-                      </span>
-                    ) : (
-                      <span className="text-slate-300 text-xs">Pending</span>
-                    )}
-                  </td>
-                  <td className={`px-6 py-4 text-xs italic ${isError ? 'text-red-600 font-medium' : 'text-slate-500'}`}>
-                    {isError ? row.errorMessage : (row.result?.reasoning || '-')}
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <div className="flex justify-end gap-1">
-                      {isError && (
-                        <button 
-                          onClick={() => onRetryRow(realIndex)}
-                          disabled={isProcessing}
-                          className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                          title="Retry Auto-Code"
-                        >
-                          <SparklesIcon className="w-4 h-4" />
-                        </button>
-                      )}
-                      <button 
-                        onClick={() => onManualEdit(realIndex)}
-                        disabled={isProcessing}
-                        className="p-1.5 text-slate-500 hover:bg-slate-100 rounded transition-colors"
-                        title="Manual Edit & Search"
-                      >
-                        <EditIcon className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              )})}
+                {currentRows.map((row, idx) => (
+                    <tr key={row.id} className="hover:bg-slate-50/80 transition-colors group">
+                        <td className="px-6 py-4 text-xs text-slate-400 font-mono">{(currentPage - 1) * rowsPerPage + idx + 1}</td>
+                        <td className="px-6 py-4">
+                            <div className="font-bold text-slate-800 text-sm">{row[mapping.jobTitleColumn]}</div>
+                            <div className="text-xs text-slate-500 mt-0.5 line-clamp-2">{row[mapping.jobDescriptionColumn]}</div>
+                            {activeModule === ModuleType.DUAL && mapping.industryColumn && (
+                                <div className="text-xs text-indigo-500 mt-0.5 font-medium">Ind: {row[mapping.industryColumn]}</div>
+                            )}
+                        </td>
+                        <td className="px-6 py-4 font-mono text-sm font-bold text-slate-700">
+                            {row.result?.code || '-'}
+                        </td>
+                        <td className="px-6 py-4 text-sm text-slate-700">
+                             {row.result?.label || '-'}
+                        </td>
+                        <td className="px-6 py-4">
+                            {row.codingStatus === 'coded' && (
+                                <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${getStatusColor(row.codingStatus, row.result?.confidence)}`}>
+                                    {row.result?.confidence}
+                                </span>
+                            )}
+                            {row.codingStatus === 'error' && <span className="text-red-500 text-xs font-bold">ERROR</span>}
+                            {row.codingStatus === 'pending' && <span className="text-slate-400 text-xs">PENDING</span>}
+                        </td>
+                         <td className="px-6 py-4 text-xs text-slate-500 max-w-xs truncate" title={row.result?.reasoning || row.errorMessage}>
+                            {row.errorMessage ? <span className="text-red-500">{row.errorMessage}</span> : row.result?.reasoning}
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                           <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button onClick={() => onManualEdit((currentPage - 1) * rowsPerPage + idx)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded">
+                                  <EditIcon className="w-4 h-4" />
+                              </button>
+                              {row.codingStatus === 'error' && (
+                                  <button onClick={() => onRetryRow((currentPage - 1) * rowsPerPage + idx)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded">
+                                      <ZapIcon className="w-4 h-4" />
+                                  </button>
+                              )}
+                           </div>
+                        </td>
+                    </tr>
+                ))}
+                {filteredData.length === 0 && (
+                    <tr>
+                        <td colSpan={7} className="text-center py-12 text-slate-400">
+                           No records found for this filter.
+                        </td>
+                    </tr>
+                )}
             </tbody>
-          </table>
-        </div>
+        </table>
+      </div>
 
-        {/* Pagination Controls */}
-        {totalPages > 1 && (
-          <div className="flex justify-between items-center mt-4 text-sm text-slate-500">
+      {/* Pagination */}
+      <div className="px-6 py-3 border-t border-slate-200 bg-white flex items-center justify-between">
+         <span className="text-xs text-slate-500">
+            Page {currentPage} of {totalPages || 1} ({filteredData.length} items)
+         </span>
+         <div className="flex gap-1">
+            <button 
+              disabled={currentPage === 1}
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              className="px-3 py-1 border rounded text-xs font-medium hover:bg-slate-50 disabled:opacity-50"
+            >
+                Prev
+            </button>
+            <button 
+              disabled={currentPage >= totalPages}
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              className="px-3 py-1 border rounded text-xs font-medium hover:bg-slate-50 disabled:opacity-50"
+            >
+                Next
+            </button>
+         </div>
+      </div>
+    </div>
+  );
+};
+
+// --- Component: ManualCodingModal ---
+const ManualCodingModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  row: ProcessedRow | null;
+  mapping: ColumnMapping;
+  activeModule: ModuleType;
+  settings: AISettings;
+  onSave: (result: CodedResult) => void;
+}> = ({ isOpen, onClose, row, mapping, onSave }) => {
+  const [formState, setFormState] = useState<CodedResult>({ code: '', label: '', confidence: 'Manual', reasoning: '' });
+
+  useEffect(() => {
+    if (row && row.result) {
+       setFormState(row.result);
+    } else {
+       setFormState({ code: '', label: '', confidence: 'Manual', reasoning: '' });
+    }
+  }, [row]);
+
+  if (!isOpen || !row) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center backdrop-blur-sm p-4">
+       <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95">
+          <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+             <h3 className="font-bold text-slate-800">Manual Classification</h3>
+             <button onClick={onClose} className="text-slate-400 hover:text-slate-600">&times;</button>
+          </div>
+          
+          <div className="p-6 max-h-[70vh] overflow-y-auto">
+             <div className="mb-6 p-4 bg-slate-50 rounded-lg border border-slate-100 text-sm">
+                <div className="mb-2"><span className="font-bold text-slate-500 uppercase text-xs">Primary:</span> <span className="text-slate-800 font-medium">{row[mapping.jobTitleColumn]}</span></div>
+                <div><span className="font-bold text-slate-500 uppercase text-xs">Secondary:</span> <span className="text-slate-600">{row[mapping.jobDescriptionColumn]}</span></div>
+             </div>
+
+             <div className="space-y-4">
+                <div>
+                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Code</label>
+                   <input 
+                     value={formState.code}
+                     onChange={e => setFormState({...formState, code: e.target.value})}
+                     className="w-full p-2 border border-slate-300 rounded font-mono"
+                   />
+                </div>
+                <div>
+                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Label</label>
+                   <input 
+                     value={formState.label}
+                     onChange={e => setFormState({...formState, label: e.target.value})}
+                     className="w-full p-2 border border-slate-300 rounded"
+                   />
+                </div>
+                 <div>
+                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Reasoning / Note</label>
+                   <textarea 
+                     value={formState.reasoning}
+                     onChange={e => setFormState({...formState, reasoning: e.target.value})}
+                     className="w-full p-2 border border-slate-300 rounded h-20"
+                   />
+                </div>
+             </div>
+          </div>
+
+          <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-3">
+             <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800">Cancel</button>
              <button 
-               disabled={page === 0}
-               onClick={() => setPage(p => p - 1)}
-               className="disabled:opacity-50 hover:text-blue-600"
+               onClick={() => { onSave({...formState, confidence: 'Manual'}); onClose(); }}
+               className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded hover:bg-blue-700"
              >
-               Previous
-             </button>
-             <span>Page {page + 1} of {totalPages}</span>
-             <button 
-               disabled={page === totalPages - 1}
-               onClick={() => setPage(p => p + 1)}
-               className="disabled:opacity-50 hover:text-blue-600"
-             >
-               Next
+               Save Changes
              </button>
           </div>
-        )}
-      </div>
+       </div>
     </div>
   );
 };
@@ -1912,15 +1251,24 @@ const loadSettings = (): AISettings => {
   const saved = localStorage.getItem('statcode_ai_settings');
   if (saved) {
     try {
-      return JSON.parse(saved);
+      const parsed = JSON.parse(saved);
+      // Migration logic for old settings format
+      if (!parsed.provider) {
+         return {
+            provider: parsed.mode === 'CLOUD' ? AIProvider.Gemini : AIProvider.Local,
+            model: parsed.localModel || 'gemini-2.5-flash',
+            baseUrl: parsed.localUrl,
+            apiKey: parsed.apiKey
+         };
+      }
+      return parsed;
     } catch (e) {
       console.error("Failed to parse settings", e);
     }
   }
   return {
-    mode: ProcessingMode.Cloud,
-    localUrl: "http://localhost:11434/v1/chat/completions",
-    localModel: "llama3"
+    provider: AIProvider.Gemini,
+    model: "gemini-2.5-flash"
   };
 };
 
@@ -2171,7 +1519,7 @@ export default function App() {
         activeModule={activeModule} 
         onModuleSelect={handleModuleSelect}
         onOpenSettings={() => setShowSettings(true)}
-        currentMode={aiSettings.mode}
+        currentProvider={aiSettings.provider}
         onSaveSession={handleSaveSession}
         onClearSession={handleClearSession}
         canInstall={!!deferredPrompt}
@@ -2179,12 +1527,55 @@ export default function App() {
       />
       
       <div className="flex-1 ml-64 flex flex-col">
-        <StatusBar 
-          status={status} 
-          progress={progress} 
-          activeModule={activeModule} 
-          onShowHelp={() => setShowHelp(!showHelp)}
-        />
+        {/* Pass props to status bar if needed, or keeping it static for now as per previous design */}
+        <div className="bg-white border-b border-slate-200 px-8 py-4 sticky top-0 z-20 flex items-center justify-between shadow-sm">
+          {activeModule === 'interactive' || activeModule === 'roadmap' || activeModule === 'dashboard' ? (
+             <div className="flex items-center gap-4">
+                <div className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${
+                    activeModule === 'interactive' ? 'bg-amber-100 text-amber-700' :
+                    activeModule === 'dashboard' ? 'bg-emerald-100 text-emerald-700' :
+                    'bg-purple-100 text-purple-700'
+                }`}>
+                    {activeModule === 'interactive' ? 'Interactive Mode' : activeModule === 'dashboard' ? 'Analytics Dashboard' : 'Project Management'}
+                </div>
+             </div>
+          ) : (
+             <div className="flex items-center gap-4">
+                <div className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${
+                  status === CodingStatus.Idle ? 'bg-slate-100 text-slate-600' :
+                  status === CodingStatus.Processing ? 'bg-amber-100 text-amber-700 animate-pulse' :
+                  'bg-blue-100 text-blue-700'
+                }`}>
+                  {status}
+                </div>
+                <span className="text-sm font-medium text-slate-800 border-l border-slate-200 pl-4">
+                  Module: {activeModule}
+                </span>
+                {status === CodingStatus.Processing && (
+                  <span className="text-sm text-slate-500">Processing batch job...</span>
+                )}
+             </div>
+          )}
+          
+          <div className="flex items-center gap-4">
+            {status === CodingStatus.Processing ? (
+              <div className="w-64 h-2 bg-slate-100 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-blue-600 transition-all duration-300 ease-out"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+            ) : (
+              <button 
+                onClick={() => setShowHelp(!showHelp)}
+                className="text-slate-400 hover:text-blue-600 transition-colors flex items-center gap-1 text-sm font-medium"
+              >
+                <HelpCircleIcon className="w-4 h-4" />
+                Module Info
+              </button>
+            )}
+          </div>
+        </div>
 
         <main className="flex-1 relative">
           
@@ -2252,11 +1643,10 @@ export default function App() {
               </p>
               
               {/* Mode Indicator in Idle Screen */}
-              <div className={`mb-6 px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 ${
-                aiSettings.mode === ProcessingMode.Cloud ? 'bg-blue-50 text-blue-700' : 'bg-emerald-50 text-emerald-700'
-              }`}>
-                {aiSettings.mode === ProcessingMode.Cloud ? <WifiIcon className="w-4 h-4" /> : <WifiOffIcon className="w-4 h-4" />}
-                Using {aiSettings.mode === ProcessingMode.Cloud ? 'Cloud' : 'Local'} Engine
+              <div className="mb-6 px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 bg-slate-100 text-slate-600 border border-slate-200">
+                <BrainIcon className="w-4 h-4" />
+                Current Engine: <span className="text-slate-900 font-bold">{aiSettings.model}</span> 
+                <span className="text-xs ml-1 text-slate-400">({aiSettings.provider})</span>
               </div>
 
               <div className="w-full max-w-2xl">
