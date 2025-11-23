@@ -1,8 +1,9 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { CodingStatus, RawDataRow, ProcessedRow, ColumnMapping, ModuleType, AIProvider, AISettings, SearchResult, CodedResult } from './types';
+import { CodingStatus, RawDataRow, ProcessedRow, ColumnMapping, ModuleType, AIProvider, AISettings, SearchResult, CodedResult, ReferenceEntry } from './types';
 import { parseDataFile, exportToCSV } from './utils/csvHelper';
 import { codeSingleOccupation, searchClassification, suggestCodes } from './services/geminiService';
+import { addReferenceEntries, findReferenceMatch, getReferenceStats, clearReferenceData } from './services/dbService';
 import { 
   UploadIcon, 
   FileSpreadsheetIcon, 
@@ -258,50 +259,193 @@ const RoadmapView: React.FC = () => {
              ))}
           </div>
        </div>
-
-       {/* Detail Modal */}
-       {selectedItem && (
-         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center backdrop-blur-sm p-4" onClick={() => setSelectedItem(null)}>
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
-               <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
-                  <div className="flex items-center gap-2">
-                     <span className="bg-slate-200 text-slate-700 font-mono font-bold text-xs px-2 py-1 rounded">{selectedItem.id}</span>
-                     <h3 className="font-bold text-slate-800">{selectedItem.title}</h3>
-                  </div>
-                  <button onClick={() => setSelectedItem(null)} className="text-slate-400 hover:text-slate-600 text-xl">&times;</button>
-               </div>
-               <div className="p-6">
-                  <div className="mb-6">
-                     <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">User Story</h4>
-                     <p className="text-slate-700 italic bg-slate-50 p-3 rounded-lg border border-slate-100 text-sm">
-                        "{selectedItem.story}"
-                     </p>
-                  </div>
-                  <div>
-                     <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Acceptance Criteria</h4>
-                     <ul className="space-y-2">
-                        {selectedItem.ac.map((criteria, idx) => (
-                           <li key={idx} className="flex items-start gap-2 text-sm text-slate-700">
-                              <CheckCircleIcon className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
-                              <span>{criteria}</span>
-                           </li>
-                        ))}
-                     </ul>
-                  </div>
-               </div>
-               <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end">
-                  <button 
-                    onClick={() => setSelectedItem(null)}
-                    className="px-4 py-2 text-sm font-medium bg-slate-900 text-white rounded-lg hover:bg-slate-800"
-                  >
-                    Close
-                  </button>
-               </div>
-            </div>
-         </div>
-       )}
     </div>
   );
+};
+
+// --- Component: Knowledge Base View (Reference Manager) ---
+const KnowledgeBaseView: React.FC = () => {
+    const [stats, setStats] = useState<Record<string, number>>({});
+    const [loading, setLoading] = useState(false);
+    const [uploadStep, setUploadStep] = useState<'idle' | 'mapping' | 'processing'>('idle');
+    const [uploadData, setUploadData] = useState<RawDataRow[]>([]);
+    const [targetModule, setTargetModule] = useState<ModuleType>(ModuleType.ISCO08);
+    const [colMapping, setColMapping] = useState({ term: '', code: '', label: '', desc: '' });
+
+    const fetchStats = async () => {
+        const s = await getReferenceStats();
+        setStats(s);
+    };
+
+    useEffect(() => {
+        fetchStats();
+    }, []);
+
+    const handleFile = async (file: File) => {
+        try {
+            setLoading(true);
+            const data = await parseDataFile(file);
+            setUploadData(data);
+            setUploadStep('mapping');
+        } catch (e) {
+            alert("Error parsing file");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleImport = async () => {
+        setUploadStep('processing');
+        const entries: ReferenceEntry[] = uploadData.map(row => ({
+            id: crypto.randomUUID(),
+            module: targetModule,
+            term: row[colMapping.term] ? String(row[colMapping.term]) : '',
+            code: row[colMapping.code] ? String(row[colMapping.code]) : '',
+            label: row[colMapping.label] ? String(row[colMapping.label]) : '',
+            description: colMapping.desc ? String(row[colMapping.desc]) : undefined,
+            source: 'upload',
+            addedAt: Date.now()
+        })).filter(e => e.term && e.code);
+
+        await addReferenceEntries(entries);
+        await fetchStats();
+        setUploadStep('idle');
+        setUploadData([]);
+        setColMapping({ term: '', code: '', label: '', desc: '' });
+    };
+
+    const handleClear = async (module: ModuleType) => {
+        if (confirm(`Are you sure you want to delete all reference data for ${module}?`)) {
+            await clearReferenceData(module);
+            await fetchStats();
+        }
+    };
+
+    return (
+        <div className="p-8 max-w-6xl mx-auto space-y-8">
+            <div className="flex items-center gap-4 mb-6">
+                 <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center">
+                    <DatabaseIcon className="w-6 h-6" />
+                 </div>
+                 <div>
+                    <h2 className="text-2xl font-bold text-slate-800">Knowledge Base & Reference Files</h2>
+                    <p className="text-slate-500">Manage local dictionaries. The app checks these first before calling online AI.</p>
+                 </div>
+            </div>
+
+            {/* Stats Cards */}
+            <div className="grid grid-cols-4 gap-4">
+                {Object.values(ModuleType).map(mod => (
+                    <div key={mod} className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 relative overflow-hidden group">
+                        <div className="text-slate-500 text-xs font-bold uppercase mb-2">{mod}</div>
+                        <div className="text-3xl font-bold text-slate-800">{stats[mod] || 0}</div>
+                        <div className="text-xs text-slate-400 mt-1">Reference Entries</div>
+                        
+                        {stats[mod] > 0 && (
+                            <button 
+                              onClick={() => handleClear(mod)}
+                              className="absolute top-4 right-4 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
+                              title="Clear Dictionary"
+                            >
+                                <TrashIcon className="w-4 h-4" />
+                            </button>
+                        )}
+                    </div>
+                ))}
+            </div>
+
+            {/* Upload Section */}
+            <div className="bg-white p-8 rounded-xl shadow-sm border border-slate-200">
+                <h3 className="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2">
+                    <UploadIcon className="w-5 h-5 text-blue-500" />
+                    Upload Reference Dictionary
+                </h3>
+
+                {uploadStep === 'idle' && (
+                    <div className="border-2 border-dashed border-slate-300 rounded-lg p-12 text-center hover:bg-slate-50 transition-colors">
+                        <p className="text-slate-500 mb-4">Upload a CSV or Excel file containing official codes and descriptions.</p>
+                         <label className="inline-block">
+                            <input 
+                            type="file" 
+                            accept=".csv, .xlsx, .xls" 
+                            className="hidden" 
+                            onChange={(e) => {
+                                if (e.target.files?.[0]) handleFile(e.target.files[0]);
+                            }}
+                            />
+                            <span className="px-6 py-2 bg-slate-900 text-white font-bold rounded-lg cursor-pointer hover:bg-slate-700">
+                                Select Reference File
+                            </span>
+                        </label>
+                    </div>
+                )}
+
+                {uploadStep === 'mapping' && (
+                    <div className="space-y-6 max-w-xl mx-auto">
+                        <div>
+                            <label className="block text-sm font-bold text-slate-700 mb-2">Target Module</label>
+                            <select 
+                                className="w-full p-2 border rounded"
+                                value={targetModule}
+                                onChange={e => setTargetModule(e.target.value as ModuleType)}
+                            >
+                                {Object.values(ModuleType).map(m => <option key={m} value={m}>{m}</option>)}
+                            </select>
+                        </div>
+                        
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-bold text-slate-700 mb-2">Search Term Column (Title)</label>
+                                <select className="w-full p-2 border rounded" onChange={e => setColMapping({...colMapping, term: e.target.value})}>
+                                    <option value="">Select...</option>
+                                    {Object.keys(uploadData[0] || {}).map(h => <option key={h} value={h}>{h}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-bold text-slate-700 mb-2">Code Column</label>
+                                <select className="w-full p-2 border rounded" onChange={e => setColMapping({...colMapping, code: e.target.value})}>
+                                    <option value="">Select...</option>
+                                    {Object.keys(uploadData[0] || {}).map(h => <option key={h} value={h}>{h}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-bold text-slate-700 mb-2">Label Column</label>
+                                <select className="w-full p-2 border rounded" onChange={e => setColMapping({...colMapping, label: e.target.value})}>
+                                    <option value="">Select...</option>
+                                    {Object.keys(uploadData[0] || {}).map(h => <option key={h} value={h}>{h}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-bold text-slate-700 mb-2">Description (Optional)</label>
+                                <select className="w-full p-2 border rounded" onChange={e => setColMapping({...colMapping, desc: e.target.value})}>
+                                    <option value="">Select...</option>
+                                    {Object.keys(uploadData[0] || {}).map(h => <option key={h} value={h}>{h}</option>)}
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className="flex justify-end gap-3 pt-4">
+                            <button onClick={() => setUploadStep('idle')} className="px-4 py-2 text-slate-600">Cancel</button>
+                            <button 
+                                onClick={handleImport}
+                                disabled={!colMapping.term || !colMapping.code || !colMapping.label}
+                                className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded disabled:opacity-50"
+                            >
+                                Import Data
+                            </button>
+                        </div>
+                    </div>
+                )}
+                
+                {uploadStep === 'processing' && (
+                    <div className="text-center py-12">
+                        <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+                        <p className="text-slate-500">Processing and saving to local database...</p>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
 };
 
 // --- Component: Settings Modal ---
@@ -359,11 +503,7 @@ const SettingsModal: React.FC<{
     setTestStatus('testing');
     setTestMessage('');
     try {
-        // Construct a minimal test payload
-        // Gemini uses a different library, so if Gemini is selected, we assume it works if we have a key (env or user)
-        // For others, we ping the URL.
         if (localSettings.provider === AIProvider.Gemini) {
-           // Simple simulation for Gemini, as the client library handles connection
            if (!process.env.API_KEY && !localSettings.apiKey) throw new Error("Missing API Key");
            setTimeout(() => {
              setTestStatus('success');
@@ -550,8 +690,8 @@ const SettingsModal: React.FC<{
 
 // --- Component: Sidebar ---
 const Sidebar: React.FC<{ 
-  activeModule: ModuleType | 'interactive' | 'roadmap' | 'dashboard'; 
-  onModuleSelect: (m: ModuleType | 'interactive' | 'roadmap' | 'dashboard') => void;
+  activeModule: ModuleType | 'interactive' | 'roadmap' | 'dashboard' | 'knowledge'; 
+  onModuleSelect: (m: ModuleType | 'interactive' | 'roadmap' | 'dashboard' | 'knowledge') => void;
   onOpenSettings: () => void;
   currentProvider: AIProvider;
   onSaveSession: () => void;
@@ -559,7 +699,7 @@ const Sidebar: React.FC<{
   canInstall: boolean;
   onInstall: () => void;
 }> = ({ activeModule, onModuleSelect, onOpenSettings, currentProvider, onSaveSession, onClearSession, canInstall, onInstall }) => {
-  const [hoveredModule, setHoveredModule] = useState<ModuleType | 'interactive' | 'roadmap' | 'dashboard' | null>(null);
+  const [hoveredModule, setHoveredModule] = useState<ModuleType | 'interactive' | 'roadmap' | 'dashboard' | 'knowledge' | null>(null);
 
   const getProviderIcon = (p: AIProvider) => {
     switch(p) {
@@ -634,6 +774,17 @@ const Sidebar: React.FC<{
         ))}
 
         <div className="mt-4 px-4 text-xs font-semibold uppercase text-slate-500 mb-2">Tools</div>
+        <button
+            onClick={() => onModuleSelect('knowledge')}
+            className={`w-full text-left px-6 py-3 flex items-center gap-3 transition-colors ${
+            activeModule === 'knowledge'
+            ? 'bg-blue-900/30 text-amber-400 border-r-4 border-amber-500' 
+            : 'hover:bg-slate-800 hover:text-slate-100'
+            }`}
+        >
+            <DatabaseIcon className="w-4 h-4 flex-shrink-0" />
+            <span className="font-medium truncate">Knowledge Base</span>
+        </button>
         <button
             onClick={() => onModuleSelect('dashboard')}
             className={`w-full text-left px-6 py-3 flex items-center gap-3 transition-colors ${
@@ -713,7 +864,7 @@ const Sidebar: React.FC<{
           {getProviderIcon(currentProvider)}
         </button>
         <div className="mt-1 text-xs text-slate-600 text-center">
-          v1.8.0 &bull; {getProviderName(currentProvider)}
+          v1.9.0 &bull; {getProviderName(currentProvider)}
         </div>
       </div>
     </div>
@@ -836,14 +987,20 @@ const DashboardView: React.FC<{ data: ProcessedRow[]; mapping: ColumnMapping }> 
        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
           <h3 className="font-bold text-slate-700 mb-6">Confidence Distribution</h3>
           <div className="flex items-end h-40 gap-4">
-             {['High', 'Medium', 'Low'].map(lvl => {
+             {['High', 'Medium', 'Low', 'Reference'].map(lvl => {
                 const count = data.filter(r => r.result?.confidence === lvl).length;
                 const pct = coded > 0 ? (count / coded) * 100 : 0;
+                let color = 'bg-slate-300';
+                if(lvl === 'High') color = 'bg-emerald-500';
+                if(lvl === 'Medium') color = 'bg-blue-500';
+                if(lvl === 'Low') color = 'bg-amber-500';
+                if(lvl === 'Reference') color = 'bg-indigo-500';
+
                 return (
                    <div key={lvl} className="flex-1 flex flex-col justify-end items-center group">
                       <div className="text-xs font-bold text-slate-600 mb-2 opacity-0 group-hover:opacity-100 transition-opacity">{count}</div>
                       <div 
-                        className={`w-full rounded-t-md transition-all duration-500 ${lvl === 'High' ? 'bg-emerald-500' : lvl === 'Medium' ? 'bg-blue-500' : 'bg-amber-500'}`} 
+                        className={`w-full rounded-t-md transition-all duration-500 ${color}`} 
                         style={{ height: `${pct}%` }} 
                       />
                       <div className="text-xs font-bold text-slate-500 mt-2 uppercase">{lvl}</div>
@@ -1013,7 +1170,8 @@ const ResultsTable: React.FC<{
   onExport: () => void;
   activeModule: ModuleType;
   settings: AISettings;
-}> = ({ data, mapping, onAutoCode, onRetryErrors, onRetryRow, onManualEdit, isProcessing, onExport, activeModule }) => {
+  onAddToRef: (idx: number) => void;
+}> = ({ data, mapping, onAutoCode, onRetryErrors, onRetryRow, onManualEdit, isProcessing, onExport, activeModule, onAddToRef }) => {
   const [filter, setFilter] = useState<'all' | 'pending' | 'coded' | 'error' | 'low_conf'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
@@ -1050,6 +1208,7 @@ const ResultsTable: React.FC<{
     if (conf === 'High') return 'bg-emerald-100 text-emerald-700';
     if (conf === 'Medium') return 'bg-blue-100 text-blue-700';
     if (conf === 'Low') return 'bg-amber-100 text-amber-700';
+    if (conf === 'Reference') return 'bg-indigo-100 text-indigo-700';
     return 'bg-slate-100 text-slate-600';
   };
 
@@ -1119,13 +1278,15 @@ const ResultsTable: React.FC<{
                     <th className="px-6 py-3 w-48">Label</th>
                     <th className="px-6 py-3 w-24">Conf.</th>
                     <th className="px-6 py-3 w-64">Reasoning</th>
-                    <th className="px-6 py-3 w-24 text-right">Actions</th>
+                    <th className="px-6 py-3 w-32 text-right">Actions</th>
                 </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-                {currentRows.map((row, idx) => (
+                {currentRows.map((row, idx) => {
+                    const globalIdx = (currentPage - 1) * rowsPerPage + idx;
+                    return (
                     <tr key={row.id} className="hover:bg-slate-50/80 transition-colors group">
-                        <td className="px-6 py-4 text-xs text-slate-400 font-mono">{(currentPage - 1) * rowsPerPage + idx + 1}</td>
+                        <td className="px-6 py-4 text-xs text-slate-400 font-mono">{globalIdx + 1}</td>
                         <td className="px-6 py-4">
                             <div className="font-bold text-slate-800 text-sm">{row[mapping.jobTitleColumn]}</div>
                             <div className="text-xs text-slate-500 mt-0.5 line-clamp-2">{row[mapping.jobDescriptionColumn]}</div>
@@ -1153,18 +1314,23 @@ const ResultsTable: React.FC<{
                         </td>
                         <td className="px-6 py-4 text-right">
                            <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button onClick={() => onManualEdit((currentPage - 1) * rowsPerPage + idx)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded">
+                              {row.result?.confidence === 'High' && (
+                                <button onClick={() => onAddToRef(globalIdx)} className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded" title="Learn / Add to Dictionary">
+                                    <BrainIcon className="w-4 h-4" />
+                                </button>
+                              )}
+                              <button onClick={() => onManualEdit(globalIdx)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded" title="Edit">
                                   <EditIcon className="w-4 h-4" />
                               </button>
                               {row.codingStatus === 'error' && (
-                                  <button onClick={() => onRetryRow((currentPage - 1) * rowsPerPage + idx)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded">
+                                  <button onClick={() => onRetryRow(globalIdx)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded" title="Retry">
                                       <ZapIcon className="w-4 h-4" />
                                   </button>
                               )}
                            </div>
                         </td>
                     </tr>
-                ))}
+                )})}
                 {filteredData.length === 0 && (
                     <tr>
                         <td colSpan={7} className="text-center py-12 text-slate-400">
@@ -1216,7 +1382,7 @@ const ManualCodingModal: React.FC<{
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
-  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const debounceRef = useRef<any>(null); // Fixed: Changed NodeJS.Timeout to any
 
   useEffect(() => {
     if (row && row.result) {
@@ -1367,7 +1533,7 @@ const loadSettings = (): AISettings => {
 
 // --- Main App Component ---
 export default function App() {
-  const [activeModule, setActiveModule] = useState<ModuleType | 'interactive' | 'roadmap' | 'dashboard'>(ModuleType.ISCO08);
+  const [activeModule, setActiveModule] = useState<ModuleType | 'interactive' | 'roadmap' | 'dashboard' | 'knowledge'>(ModuleType.ISCO08);
   const [status, setStatus] = useState<CodingStatus>(CodingStatus.Idle);
   const [rawData, setRawData] = useState<RawDataRow[]>([]);
   const [processedData, setProcessedData] = useState<ProcessedRow[]>([]);
@@ -1432,12 +1598,12 @@ export default function App() {
   };
 
   // Handles module switching and resets state if user explicitly changes module
-  const handleModuleSelect = (module: ModuleType | 'interactive' | 'roadmap' | 'dashboard') => {
+  const handleModuleSelect = (module: ModuleType | 'interactive' | 'roadmap' | 'dashboard' | 'knowledge') => {
     if (module === activeModule) return;
     
     setActiveModule(module);
     
-    if (module === 'interactive' || module === 'roadmap' || module === 'dashboard') return;
+    if (module === 'interactive' || module === 'roadmap' || module === 'dashboard' || module === 'knowledge') return;
 
     // Reset State for new coding task
     setStatus(CodingStatus.Idle);
@@ -1448,7 +1614,7 @@ export default function App() {
   };
 
   const handleSaveSession = () => {
-    if (activeModule === 'interactive' || activeModule === 'roadmap' || activeModule === 'dashboard') return;
+    if (activeModule === 'interactive' || activeModule === 'roadmap' || activeModule === 'dashboard' || activeModule === 'knowledge') return;
     const sessionData = {
       activeModule,
       status,
@@ -1466,7 +1632,7 @@ export default function App() {
     if (window.confirm("Are you sure you want to clear the current session? All unsaved progress will be lost.")) {
       localStorage.removeItem('statcode_session');
       // Reset State
-      if (activeModule !== 'interactive' && activeModule !== 'roadmap' && activeModule !== 'dashboard') {
+      if (activeModule !== 'interactive' && activeModule !== 'roadmap' && activeModule !== 'dashboard' && activeModule !== 'knowledge') {
         setStatus(CodingStatus.Idle);
         setRawData([]);
         setProcessedData([]);
@@ -1494,7 +1660,7 @@ export default function App() {
 
   // Core batch processing logic used by both AutoCode and Retry
   const processRows = async (indicesToProcess: number[]) => {
-    if (indicesToProcess.length === 0 || activeModule === 'interactive' || activeModule === 'roadmap' || activeModule === 'dashboard') return;
+    if (indicesToProcess.length === 0 || activeModule === 'interactive' || activeModule === 'roadmap' || activeModule === 'dashboard' || activeModule === 'knowledge') return;
     
     setStatus(CodingStatus.Processing);
     setProgress(0);
@@ -1519,8 +1685,26 @@ export default function App() {
         newData[idx] = { ...row, codingStatus: 'pending', errorMessage: undefined };
 
         try {
-          const result = await codeSingleOccupation(primary, secondary, activeModule as ModuleType, aiSettings, tertiary);
-          newData[idx] = { ...row, codingStatus: 'coded', result, errorMessage: undefined };
+          // 1. Check Local Dictionary (IndexedDB)
+          const refMatch = await findReferenceMatch(primary, activeModule as ModuleType);
+          
+          if (refMatch) {
+             newData[idx] = { 
+               ...row, 
+               codingStatus: 'coded', 
+               result: {
+                 code: refMatch.code,
+                 label: refMatch.label,
+                 confidence: 'Reference',
+                 reasoning: 'Matched exactly with local dictionary entry.'
+               }, 
+               errorMessage: undefined 
+             };
+          } else {
+             // 2. If no match, call AI
+             const result = await codeSingleOccupation(primary, secondary, activeModule as ModuleType, aiSettings, tertiary);
+             newData[idx] = { ...row, codingStatus: 'coded', result, errorMessage: undefined };
+          }
         } catch (e) {
           const msg = e instanceof Error ? e.message : "Unknown error";
           newData[idx] = { ...row, codingStatus: 'error', errorMessage: msg };
@@ -1568,7 +1752,8 @@ export default function App() {
     if (status === CodingStatus.Processing) return;
     // Map IDs to indices
     const indicesToProcess: number[] = [];
-    const idMap = new Map(processedData.map((row, idx) => [row.id, idx]));
+    const entries = processedData.map((row, idx) => [row.id, idx] as [string, number]);
+    const idMap = new Map<string, number>(entries);
     
     ids.forEach(id => {
       const idx = idMap.get(id);
@@ -1590,6 +1775,27 @@ export default function App() {
       manuallyEdited: true
     };
     setProcessedData(newData);
+  };
+
+  // Add a specific result to the local DB (Learning)
+  const handleAddToRef = async (idx: number) => {
+    const row = processedData[idx];
+    if (!row.result) return;
+    
+    const entry: ReferenceEntry = {
+        id: crypto.randomUUID(),
+        module: activeModule as ModuleType,
+        term: row[mapping.jobTitleColumn],
+        code: row.result.code,
+        label: row.result.label,
+        description: row.result.reasoning,
+        source: 'learned',
+        addedAt: Date.now()
+    };
+
+    await addReferenceEntries([entry]);
+    setSaveMessage(`Added "${entry.term}" to Dictionary`);
+    setTimeout(() => setSaveMessage(null), 3000);
   };
 
   const handleExport = () => {
@@ -1622,14 +1828,15 @@ export default function App() {
       <div className="flex-1 ml-64 flex flex-col">
         {/* Pass props to status bar if needed, or keeping it static for now as per previous design */}
         <div className="bg-white border-b border-slate-200 px-8 py-4 sticky top-0 z-20 flex items-center justify-between shadow-sm">
-          {activeModule === 'interactive' || activeModule === 'roadmap' || activeModule === 'dashboard' ? (
+          {activeModule === 'interactive' || activeModule === 'roadmap' || activeModule === 'dashboard' || activeModule === 'knowledge' ? (
              <div className="flex items-center gap-4">
                 <div className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${
                     activeModule === 'interactive' ? 'bg-amber-100 text-amber-700' :
                     activeModule === 'dashboard' ? 'bg-emerald-100 text-emerald-700' :
+                    activeModule === 'knowledge' ? 'bg-blue-100 text-blue-700' :
                     'bg-purple-100 text-purple-700'
                 }`}>
-                    {activeModule === 'interactive' ? 'Interactive Mode' : activeModule === 'dashboard' ? 'Analytics Dashboard' : 'Project Management'}
+                    {activeModule === 'interactive' ? 'Interactive Mode' : activeModule === 'dashboard' ? 'Analytics Dashboard' : activeModule === 'knowledge' ? 'Knowledge Base' : 'Project Management'}
                 </div>
              </div>
           ) : (
@@ -1680,7 +1887,7 @@ export default function App() {
           )}
 
           {/* Help / Info Popover */}
-          {showHelp && activeModule !== 'interactive' && activeModule !== 'roadmap' && activeModule !== 'dashboard' && (
+          {showHelp && activeModule !== 'interactive' && activeModule !== 'roadmap' && activeModule !== 'dashboard' && activeModule !== 'knowledge' && (
              <div className="absolute top-4 right-8 z-30 w-80 bg-white rounded-xl shadow-xl border border-slate-100 p-6 animate-in fade-in slide-in-from-top-2">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="w-10 h-10 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center">
@@ -1720,12 +1927,16 @@ export default function App() {
               <RoadmapView />
           )}
 
+          {activeModule === 'knowledge' && (
+              <KnowledgeBaseView />
+          )}
+
           {activeModule === 'dashboard' && (
               <DashboardView data={processedData} mapping={mapping} />
           )}
 
           {/* Content Switching for Coding Modules */}
-          {activeModule !== 'interactive' && activeModule !== 'roadmap' && activeModule !== 'dashboard' && status === CodingStatus.Idle && (
+          {activeModule !== 'interactive' && activeModule !== 'roadmap' && activeModule !== 'dashboard' && activeModule !== 'knowledge' && status === CodingStatus.Idle && (
             <div className="h-full flex flex-col items-center justify-center pb-20 animate-in fade-in slide-in-from-bottom-4 duration-500">
               <div className="mb-8 p-4 bg-blue-50 rounded-full text-blue-600">
                 <DatabaseIcon className="w-12 h-12" />
@@ -1748,7 +1959,7 @@ export default function App() {
             </div>
           )}
 
-          {activeModule !== 'interactive' && activeModule !== 'roadmap' && activeModule !== 'dashboard' && status === CodingStatus.Mapping && (
+          {activeModule !== 'interactive' && activeModule !== 'roadmap' && activeModule !== 'dashboard' && activeModule !== 'knowledge' && status === CodingStatus.Mapping && (
             <div className="animate-in fade-in zoom-in-95 duration-300">
               <DataMapping 
                 headers={rawData.length > 0 ? Object.keys(rawData[0]).filter(k => k !== 'id') : []} 
@@ -1760,7 +1971,7 @@ export default function App() {
             </div>
           )}
 
-          {activeModule !== 'interactive' && activeModule !== 'roadmap' && activeModule !== 'dashboard' && (status === CodingStatus.Review || status === CodingStatus.Processing) && (
+          {activeModule !== 'interactive' && activeModule !== 'roadmap' && activeModule !== 'dashboard' && activeModule !== 'knowledge' && (status === CodingStatus.Review || status === CodingStatus.Processing) && (
             <ResultsTable 
               data={processedData}
               mapping={mapping}
@@ -1773,6 +1984,7 @@ export default function App() {
               onExport={handleExport}
               activeModule={activeModule as ModuleType}
               settings={aiSettings}
+              onAddToRef={handleAddToRef}
             />
           )}
         </main>
@@ -1785,7 +1997,7 @@ export default function App() {
           onSave={saveSettings}
         />
 
-        {activeModule !== 'interactive' && activeModule !== 'roadmap' && activeModule !== 'dashboard' && (
+        {activeModule !== 'interactive' && activeModule !== 'roadmap' && activeModule !== 'dashboard' && activeModule !== 'knowledge' && (
             <ManualCodingModal 
             isOpen={editingRowIndex !== null}
             onClose={() => setEditingRowIndex(null)}

@@ -1,3 +1,4 @@
+
 export enum CodingStatus {
   Idle = 'IDLE',
   Mapping = 'MAPPING',
@@ -13,7 +14,7 @@ export interface RawDataRow {
 export interface CodedResult {
   code: string;
   label: string;
-  confidence: string; // 'High' | 'Medium' | 'Low' | 'Manual'
+  confidence: string; // 'High' | 'Medium' | 'Low' | 'Manual' | 'Reference'
   reasoning?: string;
 }
 
@@ -56,4 +57,15 @@ export interface AISettings {
   apiKey?: string;     // User-supplied key for OpenAI/DeepSeek
   baseUrl?: string;    // Override URL for Local/DeepSeek
   model: string;       // Model name (e.g., 'gpt-4o', 'deepseek-chat', 'qwen2.5')
+}
+
+export interface ReferenceEntry {
+  id: string;
+  module: ModuleType;
+  term: string;       // The input text (e.g. "Software Engineer")
+  code: string;       // The code (e.g. "2512")
+  label: string;      // The official label
+  description?: string;
+  source: 'upload' | 'learned';
+  addedAt: number;
 }
