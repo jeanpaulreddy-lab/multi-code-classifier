@@ -1,0 +1,6 @@
+
+customtkinter
+pandas
+requests
+google-generativeai
+openpyxl

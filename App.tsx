@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { CodingStatus, RawDataRow, ProcessedRow, ColumnMapping, ModuleType, AIProvider, AISettings, SearchResult, CodedResult } from './types';
 import { parseDataFile, exportToCSV } from './utils/csvHelper';
@@ -58,7 +59,7 @@ const MODULE_DETAILS = {
     url: "https://unstats.un.org/unsd/classifications/Econ/COICOP"
   },
   [ModuleType.DUAL]: {
-    name: "Dual Coding (ISCO+ISIC)",
+    name: "Dual Coding (ISCO + ISIC)",
     fullTitle: "Simultaneous ISCO-08 and ISIC Rev. 4 Coding",
     description: "A specialized module that codes both the occupation (ISCO) and the industry activity (ISIC) from the same input record, considering the relationship between job title and economic activity.",
     url: "#"
@@ -340,6 +341,7 @@ const SettingsModal: React.FC<{
         break;
       case AIProvider.Local:
         defaultModel = 'qwen2.5:7b';
+        // We default to 1234 (LM Studio) if user prefers, or 11434 (Ollama)
         defaultBaseUrl = 'http://localhost:11434/v1/chat/completions';
         break;
     }
@@ -481,9 +483,12 @@ const SettingsModal: React.FC<{
                    type="text" 
                    value={localSettings.baseUrl || ''}
                    onChange={(e) => setLocalSettings({...localSettings, baseUrl: e.target.value})}
-                   placeholder={localSettings.provider === AIProvider.OpenAI ? "https://api.openai.com/v1/chat/completions" : "http://localhost:11434/v1/chat/completions"}
+                   placeholder={localSettings.provider === AIProvider.OpenAI ? "https://api.openai.com/v1/chat/completions" : "http://localhost:11434/v1/chat/completions (Ollama) or :1234 (LM Studio)"}
                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-md text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none"
                  />
+                 {localSettings.provider === AIProvider.Local && (
+                     <p className="text-[10px] text-slate-400 mt-1">Use port 11434 for Ollama, or 1234 for LM Studio.</p>
+                 )}
                </div>
              )}
 
@@ -1010,16 +1015,30 @@ const ResultsTable: React.FC<{
   settings: AISettings;
 }> = ({ data, mapping, onAutoCode, onRetryErrors, onRetryRow, onManualEdit, isProcessing, onExport, activeModule }) => {
   const [filter, setFilter] = useState<'all' | 'pending' | 'coded' | 'error' | 'low_conf'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const rowsPerPage = 10;
 
   const filteredData = data.filter(row => {
-    if (filter === 'all') return true;
-    if (filter === 'pending') return row.codingStatus === 'pending';
-    if (filter === 'error') return row.codingStatus === 'error';
-    if (filter === 'coded') return row.codingStatus === 'coded';
-    if (filter === 'low_conf') return row.result?.confidence === 'Low';
-    return true;
+    // Apply Status Filter
+    let matchesFilter = true;
+    if (filter === 'pending') matchesFilter = row.codingStatus === 'pending';
+    if (filter === 'error') matchesFilter = row.codingStatus === 'error';
+    if (filter === 'coded') matchesFilter = row.codingStatus === 'coded';
+    if (filter === 'low_conf') matchesFilter = row.result?.confidence === 'Low';
+
+    // Apply Search
+    let matchesSearch = true;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const matchesTitle = row[mapping.jobTitleColumn]?.toLowerCase().includes(q) || false;
+      const matchesDesc = row[mapping.jobDescriptionColumn]?.toLowerCase().includes(q) || false;
+      const matchesCode = row.result?.code?.toLowerCase().includes(q) || false;
+      const matchesLabel = row.result?.label?.toLowerCase().includes(q) || false;
+      matchesSearch = matchesTitle || matchesDesc || matchesCode || matchesLabel;
+    }
+
+    return matchesFilter && matchesSearch;
   });
 
   const totalPages = Math.ceil(filteredData.length / rowsPerPage);
@@ -1038,22 +1057,37 @@ const ResultsTable: React.FC<{
     <div className="h-full flex flex-col bg-white">
       {/* Toolbar */}
       <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-        <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-slate-600 mr-2">Filter:</span>
-            {['all', 'pending', 'coded', 'error', 'low_conf'].map((f) => (
-                <button
-                   key={f}
-                   onClick={() => setFilter(f as any)}
-                   className={`px-3 py-1 rounded-full text-xs font-bold capitalize transition-colors ${
-                      filter === f ? 'bg-slate-800 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:border-slate-300'
-                   }`}
-                >
-                    {f.replace('_', ' ')}
-                </button>
-            ))}
+        <div className="flex items-center gap-4">
+            {/* Search Input */}
+            <div className="relative">
+                <SearchIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input 
+                    type="text"
+                    placeholder="Search rows..."
+                    value={searchQuery}
+                    onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+                    className="pl-9 pr-4 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white w-64 transition-all shadow-sm"
+                />
+            </div>
+
+            <div className="h-6 w-px bg-slate-300 mx-2" />
+
+            <div className="flex items-center gap-1">
+                {['all', 'pending', 'coded', 'error', 'low_conf'].map((f) => (
+                    <button
+                    key={f}
+                    onClick={() => { setFilter(f as any); setCurrentPage(1); }}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold capitalize transition-colors ${
+                        filter === f ? 'bg-slate-800 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                    >
+                        {f.replace('_', ' ')}
+                    </button>
+                ))}
+            </div>
         </div>
         <div className="flex items-center gap-3">
-            <button onClick={onExport} className="btn-secondary flex items-center gap-2 text-sm px-4 py-2 rounded-lg border hover:bg-slate-50">
+            <button onClick={onExport} className="btn-secondary flex items-center gap-2 text-sm px-4 py-2 rounded-lg border hover:bg-slate-50 bg-white text-slate-700 font-medium shadow-sm">
                <DownloadIcon className="w-4 h-4" /> Export
             </button>
             <button 
@@ -1066,7 +1100,7 @@ const ResultsTable: React.FC<{
             <button 
               onClick={onAutoCode}
               disabled={isProcessing}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
             >
                <SparklesIcon className="w-4 h-4" />
                {isProcessing ? 'Processing...' : 'Run Auto-Code'}
@@ -1134,7 +1168,7 @@ const ResultsTable: React.FC<{
                 {filteredData.length === 0 && (
                     <tr>
                         <td colSpan={7} className="text-center py-12 text-slate-400">
-                           No records found for this filter.
+                           No records found matching your filter.
                         </td>
                     </tr>
                 )}
@@ -1177,8 +1211,12 @@ const ManualCodingModal: React.FC<{
   activeModule: ModuleType;
   settings: AISettings;
   onSave: (result: CodedResult) => void;
-}> = ({ isOpen, onClose, row, mapping, onSave }) => {
+}> = ({ isOpen, onClose, row, mapping, onSave, activeModule, settings }) => {
   const [formState, setFormState] = useState<CodedResult>({ code: '', label: '', confidence: 'Manual', reasoning: '' });
+  const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (row && row.result) {
@@ -1186,7 +1224,39 @@ const ManualCodingModal: React.FC<{
     } else {
        setFormState({ code: '', label: '', confidence: 'Manual', reasoning: '' });
     }
+    setSuggestions([]);
+    setShowSuggestions(false);
   }, [row]);
+
+  const handleLabelChange = (text: string) => {
+    setFormState({...formState, label: text});
+    
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    
+    if (text.length > 2) {
+        setLoadingSuggestions(true);
+        debounceRef.current = setTimeout(async () => {
+            try {
+                const res = await suggestCodes(text, activeModule, settings);
+                setSuggestions(res);
+                setShowSuggestions(true);
+            } catch (e) {
+                console.error(e);
+            } finally {
+                setLoadingSuggestions(false);
+            }
+        }, 500); // 500ms debounce
+    } else {
+        setSuggestions([]);
+        setShowSuggestions(false);
+        setLoadingSuggestions(false);
+    }
+  };
+
+  const applySuggestion = (s: any) => {
+    setFormState({ ...formState, code: s.code, label: s.label });
+    setShowSuggestions(false);
+  };
 
   if (!isOpen || !row) return null;
 
@@ -1204,29 +1274,52 @@ const ManualCodingModal: React.FC<{
                 <div><span className="font-bold text-slate-500 uppercase text-xs">Secondary:</span> <span className="text-slate-600">{row[mapping.jobDescriptionColumn]}</span></div>
              </div>
 
-             <div className="space-y-4">
+             <div className="space-y-4 relative">
                 <div>
                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Code</label>
                    <input 
                      value={formState.code}
                      onChange={e => setFormState({...formState, code: e.target.value})}
-                     className="w-full p-2 border border-slate-300 rounded font-mono"
+                     className="w-full p-2 border border-slate-300 rounded font-mono focus:ring-2 focus:ring-blue-500 outline-none"
                    />
                 </div>
-                <div>
-                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Label</label>
+                <div className="relative">
+                   <label className="block text-xs font-bold text-slate-500 uppercase mb-1 flex justify-between">
+                      <span>Label</span>
+                      {loadingSuggestions && <span className="text-blue-500 animate-pulse">Searching...</span>}
+                   </label>
                    <input 
                      value={formState.label}
-                     onChange={e => setFormState({...formState, label: e.target.value})}
-                     className="w-full p-2 border border-slate-300 rounded"
+                     onChange={e => handleLabelChange(e.target.value)}
+                     className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none"
+                     onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
+                     placeholder="Type to search codes..."
                    />
+                   {/* Autocomplete Dropdown */}
+                   {showSuggestions && suggestions.length > 0 && (
+                     <div className="absolute z-50 w-full bg-white border border-slate-200 rounded-lg shadow-xl mt-1 max-h-48 overflow-y-auto">
+                        {suggestions.map((s, idx) => (
+                            <button 
+                                key={idx} 
+                                onClick={() => applySuggestion(s)}
+                                className="w-full text-left px-3 py-2 hover:bg-blue-50 text-sm border-b border-slate-50 last:border-none"
+                            >
+                                <div className="font-bold text-slate-800">{s.label}</div>
+                                <div className="text-xs text-slate-500 flex justify-between">
+                                    <span className="font-mono text-slate-600">{s.code}</span>
+                                    {s.confidence && <span className="text-emerald-600 font-medium">{s.confidence} Match</span>}
+                                </div>
+                            </button>
+                        ))}
+                     </div>
+                   )}
                 </div>
                  <div>
                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Reasoning / Note</label>
                    <textarea 
                      value={formState.reasoning}
                      onChange={e => setFormState({...formState, reasoning: e.target.value})}
-                     className="w-full p-2 border border-slate-300 rounded h-20"
+                     className="w-full p-2 border border-slate-300 rounded h-20 focus:ring-2 focus:ring-blue-500 outline-none"
                    />
                 </div>
              </div>
@@ -1236,7 +1329,7 @@ const ManualCodingModal: React.FC<{
              <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800">Cancel</button>
              <button 
                onClick={() => { onSave({...formState, confidence: 'Manual'}); onClose(); }}
-               className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded hover:bg-blue-700"
+               className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded hover:bg-blue-700 shadow-sm"
              >
                Save Changes
              </button>
